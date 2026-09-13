@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>轻表格 · Excel / CSV 查看器</title>
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    /*
+     * 查询参数存在时，在第三方解析库和主程序下载完成前就显示启动动画。
+     * 这段极小的内联脚本刻意放在 head 中，避免先闪现文件选择界面。
+     */
+    if (window.location.search.length > 1) {
+      document.documentElement.classList.add("is-startup-loading");
+    }
+  </script>
+</head>
+<body>
+  <!-- 查询参数启动遮罩覆盖整个页面，清单或工作簿处理完成后由 app.js 移除。 -->
+  <div class="startup-loader" id="startup-loader" role="status" aria-live="polite" aria-label="正在初始化查看器">
+    <div class="startup-loader-visual" aria-hidden="true">
+      <span class="startup-orbit startup-orbit-one"></span>
+      <span class="startup-orbit startup-orbit-two"></span>
+      <span class="startup-loader-mark">▦</span>
+    </div>
+    <strong id="startup-loading-title">正在准备工作表</strong>
+    <span id="startup-loading-detail">正在读取页面参数…</span>
+    <span class="startup-loading-bar" aria-hidden="true"><i></i></span>
+  </div>
+
+  <div class="app-shell">
+    <!-- 顶部品牌栏：仅展示站点信息，不包含业务操作。 -->
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="轻表格首页">
+        <span class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </span>
+        <span>
+          <strong>轻表格</strong>
+          <small>Excel / CSV Viewer</small>
+        </span>
+      </a>
+      <div class="privacy-note">
+        <span class="privacy-dot" aria-hidden="true"></span>
+        本地文件仅在浏览器内处理
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!--
+        初始文件选择区：未打开文件时居中显示，进入查看状态后完全隐藏。
+        它不是弹窗，因此不会出现遮罩、关闭按钮或焦点锁定。
+      -->
+      <section class="source-panel" id="source-panel" aria-labelledby="source-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">打开文件</p>
+            <h1 id="source-title">查看你的工作表</h1>
+            <p>从电脑选择文件，或读取允许跨域访问的在线文件。</p>
+          </div>
+          <span class="format-badge">XLSX · XLSM · XLS · CSV</span>
+        </div>
+
+        <div class="source-message" id="source-message" role="status" hidden></div>
+
+        <div class="source-grid">
+          <label class="drop-zone" id="drop-zone" for="local-file">
+            <input id="local-file" type="file" accept=".xlsx,.xlsm,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+            <span class="upload-icon" aria-hidden="true">↑</span>
+            <span class="drop-copy">
+              <strong>选择本地文件</strong>
+              <small>也可以将文件拖到这里</small>
+            </span>
+            <span class="button button-primary">浏览文件</span>
+          </label>
+
+          <div class="remote-source">
+            <span class="field-label" id="preset-field-label">预置文件</span>
+            <div class="input-row">
+              <!--
+                使用按钮和 listbox 组合实现自定义下拉，完全避开原生 select 的系统菜单样式。
+                JS 会动态创建选项，并同步 aria-expanded、aria-selected 和键盘焦点。
+              -->
+              <div class="preset-select" id="preset-file">
+                <button class="preset-trigger" id="preset-trigger" type="button"
+                  aria-labelledby="preset-field-label preset-value" aria-haspopup="listbox"
+                  aria-expanded="false" aria-controls="preset-options">
+                  <span class="preset-value" id="preset-value">暂无预置文件</span>
+                  <span class="preset-chevron" aria-hidden="true"></span>
+                </button>
+                <div class="preset-options" id="preset-options" role="listbox"
+                  aria-labelledby="preset-field-label" hidden></div>
+              </div>
+              <button class="button button-secondary" id="load-preset" type="button">打开</button>
+            </div>
+
+            <div class="divider"><span>或输入地址</span></div>
+
+            <label for="remote-url">文件 URL</label>
+            <div class="input-row">
+              <input id="remote-url" type="url" inputmode="url" placeholder="https://example.com/report.xlsx" autocomplete="off">
+              <button class="button button-secondary" id="load-url" type="button">加载</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!--
+        查看器主体采用两层紧凑结构：
+        第一层放文件信息与查看操作；第二层左侧切换 Sheet，右侧显示当前提示信息。
+      -->
+      <section class="viewer-card is-empty" id="viewer-card" aria-label="工作表查看器">
+        <div class="viewer-toolbar">
+          <div class="file-summary">
+            <span class="file-icon" aria-hidden="true">▦</span>
+            <div>
+              <strong id="file-name">尚未打开文件</strong>
+              <span id="file-meta">请选择本地文件或加载在线文件</span>
+            </div>
+          </div>
+
+          <div class="toolbar-actions">
+            <!-- 点击后结束当前查看状态，返回页面中央的文件选择界面。 -->
+            <button class="source-toggle" id="source-toggle" type="button" aria-controls="source-panel">
+              更换文件
+            </button>
+            <!-- 开启后点击任意数据单元格，会复制该单元格当前显示的文本。 -->
+            <button class="copy-toggle" id="copy-toggle" type="button" aria-pressed="false" title="开启点击单元格复制">
+              复制
+            </button>
+            <div class="segmented" id="view-switch" aria-label="视图模式">
+              <button type="button" data-view="raw" class="is-active" disabled>原始视图</button>
+              <button type="button" data-view="data" disabled>数据视图</button>
+            </div>
+            <div class="search-box" role="search">
+              <span aria-hidden="true">⌕</span>
+              <input id="sheet-search" type="search" placeholder="搜索所有列" aria-label="搜索工作表" disabled>
+              <!-- 原始视图中显示“当前项/总数”，并可循环跳转到上一项或下一项。 -->
+              <span class="search-count" id="search-count" hidden>0/0</span>
+              <button class="search-nav" id="search-prev" type="button" aria-label="上一个匹配项" title="上一个匹配项" disabled>↑</button>
+              <button class="search-nav" id="search-next" type="button" aria-label="下一个匹配项" title="下一个匹配项" disabled>↓</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="status-line" id="status-line">
+          <!-- Sheet 标签放入提示栏左侧，较多时只在这一块内部横向滚动。 -->
+          <div class="sheet-bar" id="sheet-bar" hidden>
+            <span class="sheet-label">工作表</span>
+            <div class="sheet-tabs" id="sheet-tabs" role="tablist"></div>
+          </div>
+
+          <!-- 提示信息固定在右侧，并保留图标以区分普通、警告和错误状态。 -->
+          <div class="status-feedback" role="status" aria-live="polite">
+            <span class="status-icon" aria-hidden="true">i</span>
+            <span id="status-text">准备就绪</span>
+          </div>
+        </div>
+
+        <div class="grid-empty" id="grid-empty">
+          <div class="empty-illustration" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <strong>表格会显示在这里</strong>
+          <p>打开一个 Excel 或 CSV 文件即可开始查看。</p>
+        </div>
+
+        <!-- 表头与表体分离：表体只挂载可视区域附近的行，实现虚拟滚动。 -->
+        <div class="grid-viewport" id="grid-viewport" tabindex="0" hidden aria-label="工作表内容">
+          <div class="grid-header" id="grid-header"></div>
+          <div class="grid-body" id="grid-body"></div>
+        </div>
+
+        <div class="loading-overlay" id="loading-overlay" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <strong id="loading-title">正在读取文件</strong>
+          <span id="loading-detail">请稍候…</span>
+        </div>
+
+        <!-- 复制成功或失败时短暂显示，不占用工具栏和表格高度。 -->
+        <div class="copy-toast" id="copy-toast" role="status" aria-live="polite" hidden></div>
+      </section>
+    </main>
+
+    <footer>
+      <span>纯静态 · 只读模式</span>
+      <span>文件不会上传到本站</span>
+    </footer>
+  </div>
+
+  <!-- 固定版本的浏览器包，无 npm、打包或构建步骤。 -->
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

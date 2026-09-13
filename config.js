@@ -1,0 +1,46 @@
+/**
+ * 站点部署配置。
+ *
+ * 这是唯一需要部署人员按实际环境修改的文件。页面会从
+ * window.EXCEL_VIEWER_CONFIG 读取预置文件列表和虚拟滚动参数。
+ * 修改后直接刷新浏览器即可生效，不需要运行任何构建命令。
+ */
+window.EXCEL_VIEWER_CONFIG = {
+  /**
+   * 预置的远程文件列表。
+   *
+   * 每一项包含：
+   * - id：文件的稳定唯一标识；
+   * - name：显示在下拉列表中的名称；
+   * - url：文件地址，可以是同源相对地址或允许 CORS 的完整 URL；
+   * - type：可选，支持 xlsx、xlsm、xls、csv。省略时根据地址和文件签名判断。
+   * - action：可选；设置为 "open" 时页面启动后默认打开该文件。
+   *
+   * 通过 ?config= 加载的远程 JSON 也使用 { files: [] } 结构和相同字段。
+   * 若合并后的列表中有多个 action: "open"，页面只打开排列在最前面的一个。
+   *
+   * 示例：
+   * { id: "report", name: "月度报表", url: "/files/report.xlsx", type: "xlsx" }
+   */
+  files: [{
+    id: "local_id_1",
+    name: "IDE编辑器快捷键",
+    url: "/excel/ide_key.xlsx",
+    type: "xlsx",
+    action: "open"
+  }, {
+    id: "local_id_2",
+    name: "Edge浏览器快捷键",
+    url: "/excel/edge_key.xlsx",
+    type: "xlsx"
+  }],
+
+  /** 页面打开后自动加载的预置文件 id；null 表示不自动加载。 */
+  defaultFileId: null,
+
+  /** 有效行数超过该值后启用行虚拟化，避免一次创建过多 DOM 节点。 */
+  virtualizationThreshold: 500,
+
+  /** 虚拟列表在可视区域上下额外保留的行数，用于减少快速滚动时的空白闪烁。 */
+  overscanRows: 10
+};
