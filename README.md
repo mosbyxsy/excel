@@ -13,7 +13,9 @@
 - 地址栏启动文件：查询参数可直接指定相对路径或 HTTP(S) 文件地址；在线文件打开成功后会自动写回地址栏，刷新页面仍打开当前文件
 - 远程清单：支持通过 `?config=JSON文件路径` 动态扩展预置文件列表
 - Excel 多 Sheet 切换
-- 原始视图：尽量显示字体、颜色、边框、对齐、尺寸、隐藏行列和合并单元格
+- 页面 Logo、加载动画和浏览器标签页使用统一图标；标签页标题跟随当前文件名
+- 原始视图：尽量显示字体、主题色/索引色/ARGB 填充、Excel 超级表背景与条纹、边框、对齐、尺寸、隐藏行列和合并单元格
+- 原始视图自适应：点击左上角图标后按 Excel 原列宽比例缩放并铺满可视区域，不产生横向滚动条；恢复原宽并横向滚动时图标仍固定在左上角
 - 原始视图搜索：匹配单元格高亮，支持计数、上一个、下一个和自动滚动定位
 - 数据视图：首个非空行作为表头，支持全行过滤和列排序
 - 点击复制：开启后点击数据单元格即可复制其格式化显示文本
@@ -72,7 +74,8 @@ JSON 必须使用 `{ "files": [] }` 结构，文件字段与 `config.js` 相同�
       "name": "月度报表",
       "url": "files/monthly-report.xlsx",
       "type": "xlsx",
-      "action": "open"
+      "action": "open",
+      "autoFit": true
     }
   ]
 }
@@ -127,6 +130,7 @@ window.EXCEL_VIEWER_CONFIG = {
 - `url`：同源相对路径，或允许 CORS 的完整 URL。
 - `type`：可省略；支持 `xlsx`、`xlsm`、`xls`、`csv`。
 - `action`：可省略；值为 `open` 时作为默认打开文件，多个匹配项只使用第一个。
+- `autoFit`：可省略，默认 `false`；设为 `true` 时该文件打开后自动开启原始视图宽度自适应。
 - `defaultFileId`：页面打开后自动加载的文件 id；`null` 表示不自动加载。
 - `virtualizationThreshold`：超过多少个有效行后启用虚拟滚动。
 - `overscanRows`：可视区域上下额外渲染的行数。
@@ -147,6 +151,8 @@ Access-Control-Allow-Origin: https://viewer.example.com
 
 500 行以内的工作表使用标准 HTML 表格渲染，可以显示跨行和跨列合并。超过阈值后改用行虚拟化；为保证每一行可以独立挂载和卸载，跨行合并会降级为只在左上角单元格显示内容，单行内的跨列合并仍会保留。
 
+`.xlsx`/`.xlsm` 中的 Excel 超级表会读取表区域、内置 `TableStyleLight`、`TableStyleMedium`、`TableStyleDark` 样式名、表头/汇总行、隔行/隔列以及首末列开关。查看器还会从 OOXML 的 `styles.xml` 和 `table*.xml` 补读 `dataDxfId` 背景线索，以还原仅保存在超级表定义中、没有写入普通 `cell.style` 的底色。单元格手工设置的格式优先于超级表格式。
+
 ### 数据视图
 
 首个非空且非隐藏的行作为表头，之后的非空、非隐藏行作为数据。空表头使用 Excel 列字母代替；重复表头会在内部显示名后增加序号。点击列头依次切换升序、降序和取消排序。
@@ -166,16 +172,19 @@ Access-Control-Allow-Origin: https://viewer.example.com
 
 - 不显示图表、图片、数据透视表和条件格式计算结果。
 - 不支持密码保护或加密工作簿。
-- ExcelJS/SheetJS 无法完全复刻 Excel 桌面端的所有主题色和复杂数字格式。
+- 支持工作簿自定义主题色、tint 明暗色调、索引色、纯色背景和内置 Excel 超级表样式；复杂图案填充使用 CSS 近似显示。
+- ExcelJS 不提供 Excel 桌面端完整的自定义超级表样式库。无法取得规则的自定义样式会按当前工作簿主题使用兼容配色，并在状态区提示。
+- ExcelJS/SheetJS 无法完全复刻 Excel 桌面端的条件格式计算结果和复杂数字格式。
 - `.xls` 使用兼容解析器，格式还原程度低于 `.xlsx` 和 `.xlsm`。
 
 ## 文件结构
 
 ```text
 .
-├── index.html   # 页面结构与固定版本 CDN 引用
+├── index.html   # 页面结构与固定版本 ExcelJS、SheetJS、JSZip CDN 引用
 ├── styles.css   # 页面视觉、表格和虚拟滚动样式
 ├── config.js    # 部署时可修改的在线文件配置
+├── favicon.svg  # 页面 Logo 与浏览器标签页图标
 ├── app.js       # 文件解析、状态管理和渲染逻辑
 └── README.md    # 使用、部署和限制说明
 ```

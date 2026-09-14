@@ -113,10 +113,8 @@ body {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  color: #fff;
-  background: linear-gradient(145deg, #20a47f, #0e644f);
+  background: url("favicon.svg") center / contain no-repeat;
   box-shadow: 0 12px 30px rgba(21, 122, 98, 0.28);
-  font-size: 25px;
   animation: startup-pulse 1.8s ease-in-out infinite;
 }
 
@@ -243,18 +241,15 @@ select {
 .brand-mark {
   width: 34px;
   height: 34px;
-  padding: 7px;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 3px;
+  display: block;
+  flex: 0 0 auto;
   border-radius: 11px;
-  background: var(--brand);
+  background: url("favicon.svg") center / contain no-repeat;
   box-shadow: 0 7px 18px rgba(21, 122, 98, 0.24);
 }
 
 .brand-mark span {
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.88);
+  display: none;
 }
 
 .brand strong,
@@ -708,10 +703,7 @@ select {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border-radius: 10px;
-  color: var(--brand-dark);
-  background: var(--brand-soft);
-  font-size: 18px;
+  background: url("favicon.svg") center / contain no-repeat;
 }
 
 .file-summary strong,
@@ -1047,6 +1039,11 @@ select {
   box-shadow: inset 0 0 0 2px rgba(21, 122, 98, 0.35);
 }
 
+/* 自适应宽度已经严格限制在视口内，不显示因边框舍入产生的横向滚动条。 */
+.grid-viewport.is-raw-fit {
+  overflow-x: hidden;
+}
+
 .loading-overlay {
   position: absolute;
   inset: 48px 0 0;
@@ -1217,13 +1214,74 @@ button.grid-header-cell:hover {
   font-size: 13px;
 }
 
-/* 原始小表使用标准 table，以完整支持跨行、跨列合并。 */
+/*
+ * 原始小表使用标准 table，以完整支持跨行、跨列合并。
+ * 表头需要保持独立的粘性背景，因此不能使用 collapse：折叠边框会让表体
+ * 单元格的深色竖线参与表头边框冲突，进而污染 A/B/C/D 的分割线。
+ * 相邻数据单元格的重复边框改由 app.js 在渲染时只保留右、下两侧解决。
+ */
 .raw-table {
-  min-width: 100%;
   width: max-content;
+  min-width: 0;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
+}
+
+/* 原始视图左上角的自适应开关，同时适用于标准 table 和虚拟滚动表头。 */
+.raw-fit-corner {
+  padding: 0 !important;
+}
+
+/* 标准 table 的左上角需要同时固定横向和纵向位置，原始宽度滚动时图标不离开视口。 */
+.raw-table thead th.raw-fit-corner {
+  left: 0;
+  z-index: 30;
+}
+
+.raw-fit-toggle {
+  width: 100%;
+  height: 100%;
+  min-height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: #6f8580;
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.raw-fit-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.raw-fit-toggle:hover {
+  color: var(--brand-dark);
+  background: #e8f3ef;
+}
+
+.raw-fit-toggle:focus-visible {
+  position: relative;
+  z-index: 2;
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--brand);
+}
+
+.raw-fit-toggle.is-active {
+  color: #fff;
+  background: var(--brand);
+}
+
+.raw-fit-toggle.is-active:hover {
+  background: var(--brand-dark);
 }
 
 .raw-table thead th {
@@ -1240,7 +1298,9 @@ button.grid-header-cell:hover {
 }
 
 .raw-table tbody th {
-  width: 56px;
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
   position: sticky;
   left: 0;
   z-index: 4;

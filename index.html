@@ -5,15 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>轻表格 · Excel / CSV 查看器</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
   <script>
     /*
-     * 查询参数存在时，在第三方解析库和主程序下载完成前就显示启动动画。
-     * 这段极小的内联脚本刻意放在 head 中，避免先闪现文件选择界面。
+     * 首帧先显示启动动画。app.js 读取 config.js 后才能知道是否需要默认打开文件，
+     * 因此不能只依赖地址栏参数判断，否则会先闪现文件选择界面。
      */
-    if (window.location.search.length > 1) {
-      document.documentElement.classList.add("is-startup-loading");
-    }
+    document.documentElement.classList.add("is-startup-loading");
   </script>
 </head>
 <body>
@@ -22,7 +21,7 @@
     <div class="startup-loader-visual" aria-hidden="true">
       <span class="startup-orbit startup-orbit-one"></span>
       <span class="startup-orbit startup-orbit-two"></span>
-      <span class="startup-loader-mark">▦</span>
+      <span class="startup-loader-mark"></span>
     </div>
     <strong id="startup-loading-title">正在准备工作表</strong>
     <span id="startup-loading-detail">正在读取页面参数…</span>
@@ -33,9 +32,7 @@
     <!-- 顶部品牌栏：仅展示站点信息，不包含业务操作。 -->
     <header class="topbar">
       <a class="brand" href="#" aria-label="轻表格首页">
-        <span class="brand-mark" aria-hidden="true">
-          <span></span><span></span><span></span><span></span>
-        </span>
+        <span class="brand-mark" aria-hidden="true"></span>
         <span>
           <strong>轻表格</strong>
           <small>Excel / CSV Viewer</small>
@@ -113,7 +110,7 @@
       <section class="viewer-card is-empty" id="viewer-card" aria-label="工作表查看器">
         <div class="viewer-toolbar">
           <div class="file-summary">
-            <span class="file-icon" aria-hidden="true">▦</span>
+            <span class="file-icon" aria-hidden="true"></span>
             <div>
               <strong id="file-name">尚未打开文件</strong>
               <span id="file-meta">请选择本地文件或加载在线文件</span>
@@ -191,6 +188,8 @@
 
   <!-- 固定版本的浏览器包，无 npm、打包或构建步骤。 -->
   <script src="config.js"></script>
+  <!-- JSZip 仅用于读取 XLSX 包内的 table/styles XML，以补足 ExcelJS 未展开的超级表样式。 -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <script src="app.js"></script>

@@ -1,4 +1,4 @@
-/* global ExcelJS, XLSX */
+/* global ExcelJS, XLSX, JSZip */
 
 /**
  * 轻表格：零构建的 Excel / CSV 只读查看器。
@@ -32,9 +32,12 @@
   const SAFETY_LIMITS = Object.freeze({ rows: 100000, columns: 1000 });
   const DATA_ROW_HEIGHT = 38;
   const DEFAULT_RAW_ROW_HEIGHT = 28;
-  const ROW_NUMBER_WIDTH = 56;
+  const ROW_NUMBER_WIDTH = 42;
+  // 预留一个物理像素，规避 table 边框与小数列宽舍入造成的 1px 横向溢出。
+  const RAW_FIT_WIDTH_GUARD = 1;
   const MIN_COLUMN_WIDTH = 64;
   const MAX_COLUMN_WIDTH = 420;
+  const DEFAULT_PAGE_TITLE = "轻表格 · Excel / CSV 查看器";
 
   /**
    * 将部署配置与默认值合并，并将数字参数限制在合理区间。
@@ -110,6 +113,8 @@
     rawMatchLookup: new Map(),
     rawMatchIndex: -1,
     sort: { column: -1, direction: null },
+    // 原始视图是否按当前视口宽度等比缩放所有可见列；每次打开文件时由文件配置初始化。
+    rawFitEnabled: false,
     copyEnabled: false,
     copyToastTimer: 0,
     renderer: null,
@@ -391,22 +396,191 @@
     return result - 1;
   }
 
-  function colorToCss(color) {
-    if (!color || typeof color !== "object") return "";
-    if (typeof color.argb === "string") {
-      const argb = color.argb.replace(/[^0-9a-f]/gi, "");
-      if (argb.length === 8) return `#${argb.slice(2)}`;
-      if (argb.length === 6) return `#${argb}`;
-    }
-    if (typeof color.rgb === "string") {
-      const rgb = color.rgb.replace(/[^0-9a-f]/gi, "");
-      if (rgb.length >= 6) return `#${rgb.slice(-6)}`;
-    }
-    // 主题色需要读取主题 XML 才能精确换算；无法解析时交给默认样式处理。
+  /**
+   * Excel 颜色并不总是直接保存为 RGB。实际文件经常保存“主题色编号 + 色调”，
+   * 例如示例文件的隔行底色就是 theme=0/theme=3 再叠加 tint。旧实现只识别
+   * ARGB/RGB，因此这些单元格会错误地显示成白色。
+   *
+   * 这里保留一份 Office 默认主题作为容错值。读取 XLSX 时会再从文件自身的
+   * theme1.xml 中覆盖这些颜色，所以使用自定义主题的工作簿也能正确显示。
+   */
+  const DEFAULT_THEME_COLORS = [
+    "FFFFFF", "000000", "E7E6E6", "44546A",
+    "4472C4", "ED7D31", "A5A5A5", "FFC000",
+    "5B9BD5", "70AD47", "0563C1", "954F72"
+  ];
+
+  /**
+   * Excel 97-2003 以及少数兼容软件会使用 0~63 的索引色。
+   * 64 表示“自动颜色”，不能当作真实颜色渲染。
+   */
+  const EXCEL_INDEXED_COLORS = [
+    "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+    "000000", "FFFFFF", "FF0000", "00FF00", "0000FF", "FFFF00", "FF00FF", "00FFFF",
+    "800000", "008000", "000080", "808000", "800080", "008080", "C0C0C0", "808080",
+    "9999FF", "993366", "FFFFCC", "CCFFFF", "660066", "FF8080", "0066CC", "CCCCFF",
+    "000080", "FF00FF", "FFFF00", "00FFFF", "800080", "800000", "008080", "0000FF",
+    "00CCFF", "CCFFFF", "CCFFCC", "FFFF99", "99CCFF", "FF99CC", "CC99FF", "FFCC99",
+    "3366FF", "33CCCC", "99CC00", "FFCC00", "FF9900", "FF6600", "666699", "969696",
+    "003366", "339966", "003300", "333300", "993300", "993366", "333399", "333333"
+  ];
+
+  /** 主题色编号并不等于 XML 节点顺序，必须按 OOXML 规定的固定名称映射。 */
+  const THEME_COLOR_NAMES = [
+    "lt1", "dk1", "lt2", "dk2", "accent1", "accent2",
+    "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"
+  ];
+
+  function normalizeHexColor(value) {
+    const hex = String(value || "").replace(/[^0-9a-f]/gi, "").toUpperCase();
+    if (hex.length === 3) return hex.split("").map((character) => character + character).join("");
+    if (hex.length === 6 || hex.length === 8) return hex;
     return "";
   }
 
-  function normalizeBorderSide(side) {
+  /**
+   * 将 Excel 的 ARGB 转为 CSS。绝大多数颜色的透明度为 FF；若确实带透明度，
+   * 使用 rgba 保留效果，而不是像旧实现一样直接丢弃 alpha。
+   */
+  function hexToCss(value) {
+    const hex = normalizeHexColor(value);
+    if (hex.length === 6) return `#${hex}`;
+    if (hex.length !== 8) return "";
+    const alpha = parseInt(hex.slice(0, 2), 16) / 255;
+    if (alpha >= 0.999) return `#${hex.slice(2)}`;
+    const red = parseInt(hex.slice(2, 4), 16);
+    const green = parseInt(hex.slice(4, 6), 16);
+    const blue = parseInt(hex.slice(6, 8), 16);
+    return `rgba(${red}, ${green}, ${blue}, ${Math.round(alpha * 1000) / 1000})`;
+  }
+
+  /** RGB 与 HSL 互转，用于复现 Excel 主题色的 tint（明暗色调）计算。 */
+  function rgbToHsl(red, green, blue) {
+    const r = red / 255;
+    const g = green / 255;
+    const b = blue / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const lightness = (max + min) / 2;
+    if (max === min) return [0, 0, lightness];
+    const delta = max - min;
+    const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    let hue;
+    if (max === r) hue = (g - b) / delta + (g < b ? 6 : 0);
+    else if (max === g) hue = (b - r) / delta + 2;
+    else hue = (r - g) / delta + 4;
+    return [hue / 6, saturation, lightness];
+  }
+
+  function hueToRgb(p, q, value) {
+    let hue = value;
+    if (hue < 0) hue += 1;
+    if (hue > 1) hue -= 1;
+    if (hue < 1 / 6) return p + (q - p) * 6 * hue;
+    if (hue < 1 / 2) return q;
+    if (hue < 2 / 3) return p + (q - p) * (2 / 3 - hue) * 6;
+    return p;
+  }
+
+  function hslToRgb(hue, saturation, lightness) {
+    if (saturation === 0) {
+      const gray = Math.round(lightness * 255);
+      return [gray, gray, gray];
+    }
+    const q = lightness < 0.5
+      ? lightness * (1 + saturation)
+      : lightness + saturation - lightness * saturation;
+    const p = 2 * lightness - q;
+    return [
+      Math.round(hueToRgb(p, q, hue + 1 / 3) * 255),
+      Math.round(hueToRgb(p, q, hue) * 255),
+      Math.round(hueToRgb(p, q, hue - 1 / 3) * 255)
+    ];
+  }
+
+  /**
+   * Excel 的 tint 范围为 -1~1：负值降低亮度，正值向白色提高亮度。
+   * 对 HSL 的亮度通道计算，可还原示例中的浅灰与灰蓝隔行背景。
+   */
+  function applyExcelTint(hexValue, tintValue) {
+    const hex = normalizeHexColor(hexValue).slice(-6);
+    const tint = Number(tintValue);
+    if (hex.length !== 6 || !Number.isFinite(tint) || tint === 0) return hex;
+    const [hue, saturation, originalLightness] = rgbToHsl(
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16)
+    );
+    const normalizedTint = clamp(tint, -1, 1);
+    const lightness = normalizedTint < 0
+      ? originalLightness * (1 + normalizedTint)
+      : originalLightness * (1 - normalizedTint) + normalizedTint;
+    return hslToRgb(hue, saturation, lightness)
+      .map((channel) => channel.toString(16).padStart(2, "0"))
+      .join("")
+      .toUpperCase();
+  }
+
+  /**
+   * 从 ExcelJS 保留的 theme1.xml 中提取主题颜色。解析失败时返回默认 Office
+   * 主题，避免某个非标准主题文件导致整个工作簿无法显示。
+   */
+  function extractThemeColors(workbook) {
+    const palette = DEFAULT_THEME_COLORS.slice();
+    try {
+      const themes = workbook && workbook.model && workbook.model.themes;
+      if (!themes || typeof themes !== "object") return palette;
+      const themeXml = typeof themes.theme1 === "string"
+        ? themes.theme1
+        : Object.values(themes).find((value) => typeof value === "string");
+      if (!themeXml) return palette;
+
+      const documentNode = new DOMParser().parseFromString(themeXml, "application/xml");
+      if (documentNode.getElementsByTagName("parsererror").length) return palette;
+      const allNodes = Array.from(documentNode.getElementsByTagName("*"));
+      const colorScheme = allNodes.find((node) => node.localName === "clrScheme");
+      if (!colorScheme) return palette;
+
+      for (let index = 0; index < THEME_COLOR_NAMES.length; index += 1) {
+        const name = THEME_COLOR_NAMES[index];
+        const themeNode = Array.from(colorScheme.children).find((node) => node.localName === name);
+        if (!themeNode) continue;
+        const colorNode = Array.from(themeNode.getElementsByTagName("*"))
+          .find((node) => node.localName === "srgbClr" || node.localName === "sysClr");
+        if (!colorNode) continue;
+        const rawValue = colorNode.getAttribute("val");
+        const value = normalizeHexColor(
+          rawValue === "window" || rawValue === "windowText"
+            ? colorNode.getAttribute("lastClr")
+            : rawValue || colorNode.getAttribute("lastClr")
+        );
+        if (value.length >= 6) palette[index] = value.slice(-6);
+      }
+    } catch (_themeError) {
+      // 主题只影响视觉保真度，解析失败不应阻断工作簿中的数据读取。
+    }
+    return palette;
+  }
+
+  /** 将 ExcelJS/SheetJS 的 ARGB、RGB、主题色和索引色统一为安全的 CSS 颜色。 */
+  function colorToCss(color, themeColors) {
+    if (!color || typeof color !== "object") return "";
+    if (typeof color.argb === "string") return hexToCss(color.argb);
+    if (typeof color.rgb === "string") return hexToCss(color.rgb);
+
+    let baseHex = "";
+    const themeIndex = Number(color.theme);
+    const indexed = Number(color.indexed);
+    if (Number.isInteger(themeIndex) && themeIndex >= 0) {
+      baseHex = (themeColors || DEFAULT_THEME_COLORS)[themeIndex] || "";
+    } else if (Number.isInteger(indexed) && indexed >= 0 && indexed < EXCEL_INDEXED_COLORS.length) {
+      baseHex = EXCEL_INDEXED_COLORS[indexed];
+    }
+    if (!baseHex) return "";
+    return `#${applyExcelTint(baseHex, color.tint)}`;
+  }
+
+  function normalizeBorderSide(side, themeColors) {
     if (!side || !side.style) return null;
     const widths = {
       hair: 1,
@@ -427,19 +601,29 @@
     return {
       width: widths[side.style] || 1,
       style: styles[side.style] || "solid",
-      color: colorToCss(side.color) || "#9eaaa6"
+      color: colorToCss(side.color, themeColors) || "#9eaaa6"
     };
   }
 
   /** 将两个解析库的样式对象统一为页面内部使用的轻量格式。 */
-  function normalizeCellStyle(source) {
+  function normalizeCellStyle(source, themeColors) {
     if (!source || typeof source !== "object") return null;
     const font = source.font || {};
-    const fill = source.fill || {};
+    // ExcelJS 把填充放在 fill 中，SheetJS CE 则可能把 patternType/fgColor
+    // 直接放在样式根对象上；两种结构在此合并处理。
+    const fill = source.fill || (
+      source.patternType || source.pattern || source.fgColor || source.bgColor ? source : {}
+    );
     const alignment = source.alignment || {};
     const border = source.border || {};
-    const fillColor = colorToCss(fill.fgColor || fill.bgColor);
-    const fontColor = colorToCss(font.color);
+    const pattern = fill.pattern || fill.patternType || "";
+    const foregroundColor = colorToCss(fill.fgColor, themeColors);
+    const backgroundColor = colorToCss(fill.bgColor, themeColors);
+    // solid 填充以 fgColor 为准；其他图案以 bgColor 为底、fgColor 为纹理色。
+    const fillColor = pattern === "solid"
+      ? foregroundColor || backgroundColor
+      : backgroundColor || foregroundColor;
+    const fontColor = colorToCss(font.color, themeColors);
     return {
       fontName: typeof font.name === "string" ? font.name : "",
       fontSize: Number.isFinite(font.size) ? clamp(font.size, 7, 48) : null,
@@ -448,25 +632,506 @@
       underline: Boolean(font.underline),
       strike: Boolean(font.strike),
       fontColor,
-      fillColor: fill.type === "pattern" || fill.patternType || fillColor ? fillColor : "",
+      fillColor: pattern === "none" || pattern === "gray125" ? "" : fillColor,
+      fillPattern: pattern && pattern !== "none" && pattern !== "solid" && pattern !== "gray125" ? pattern : "",
+      fillPatternColor: foregroundColor,
       horizontal: alignment.horizontal || "",
       vertical: alignment.vertical || "",
       wrapText: Boolean(alignment.wrapText),
       rotation: Number.isFinite(alignment.textRotation) ? alignment.textRotation : 0,
       borders: {
-        top: normalizeBorderSide(border.top),
-        right: normalizeBorderSide(border.right),
-        bottom: normalizeBorderSide(border.bottom),
-        left: normalizeBorderSide(border.left)
+        top: normalizeBorderSide(border.top, themeColors),
+        right: normalizeBorderSide(border.right, themeColors),
+        bottom: normalizeBorderSide(border.bottom, themeColors),
+        left: normalizeBorderSide(border.left, themeColors)
       }
     };
+  }
+
+  /* ======================================================================== */
+  /* Excel“超级表”（Table）样式                                                */
+  /* ======================================================================== */
+
+  /**
+   * Excel 的内置超级表样式不会逐格写入 fill/font，而只在 table XML 中保存
+   * TableStyleLight/Medium/Dark + 编号。ExcelJS 会保留这段表模型，却不会把
+   * 它自动合并到 cell.style；因此查看器需要根据表区域和样式选项自行展开。
+   *
+   * 内置样式库按 7 个主题槽循环：中性色、强调色 1~6。主题色来自当前工作簿
+   * 的 theme1.xml，而不是固定写死为 Office 蓝色，这样自定义工作簿主题也能
+   * 保持一致的色系。
+   */
+  function tableThemeBaseColor(themeColors, styleNumber) {
+    const colorSlot = (Math.max(1, styleNumber) - 1) % 7;
+    // 第 1 个槽使用深色 2；第 2~7 个槽依次使用 accent1~accent6。
+    const themeIndex = colorSlot === 0 ? 3 : colorSlot + 3;
+    return (themeColors || DEFAULT_THEME_COLORS)[themeIndex] || DEFAULT_THEME_COLORS[4];
+  }
+
+  /** 将主题色及 tint 转成 CSS 十六进制颜色。 */
+  function tableTintColor(baseColor, tint) {
+    const color = applyExcelTint(baseColor, tint);
+    return color ? `#${color}` : "";
+  }
+
+  /**
+   * 把 TableStyleMedium2 一类名称解析成轻量配色方案。
+   * OOXML 文件只保存内置样式名，具体视觉规则由 Excel 客户端内置。这里按
+   * Light/Medium/Dark 三个系列还原表头、汇总行和条纹填充；不同编号组使用
+   * 不同深浅，覆盖 Excel 4.4.0 可识别的全部内置名称范围。
+   */
+  function createBuiltInTablePalette(styleName, themeColors) {
+    const match = String(styleName || "").match(/^TableStyle(Light|Medium|Dark)(\d+)$/i);
+    if (!match) return null;
+
+    const family = match[1].toLowerCase();
+    const number = Number(match[2]);
+    const limits = { light: 21, medium: 28, dark: 11 };
+    if (!Number.isInteger(number) || number < 1 || number > limits[family]) return null;
+
+    const group = Math.floor((number - 1) / 7);
+    const base = tableThemeBaseColor(themeColors, number);
+    const white = "#FFFFFF";
+    const dark = "#1F2926";
+
+    if (family === "light") {
+      // Light 1~7 以边界/文字强调为主；后两组逐步加强表头与条纹底色。
+      const headerTint = group === 0 ? 0.78 : group === 1 ? 0.18 : 0.58;
+      const headerIsDark = group === 1;
+      return {
+        family,
+        headerFill: tableTintColor(base, headerTint),
+        headerFont: headerIsDark ? white : dark,
+        stripeFill: tableTintColor(base, group === 2 ? 0.84 : 0.9),
+        columnStripeFill: tableTintColor(base, group === 2 ? 0.78 : 0.86),
+        totalFill: tableTintColor(base, group === 1 ? 0.72 : 0.84),
+        totalFont: dark,
+        bodyFill: "",
+        bodyFont: ""
+      };
+    }
+
+    if (family === "medium") {
+      // Medium 系列通常使用纯主题色表头，并用浅色主题填充隔行/隔列。
+      const stripeTints = [0.82, 0.74, 0.88, 0.66];
+      const stripeTint = stripeTints[group] == null ? 0.82 : stripeTints[group];
+      return {
+        family,
+        headerFill: tableTintColor(base, group === 3 ? -0.12 : 0),
+        headerFont: white,
+        stripeFill: tableTintColor(base, stripeTint),
+        columnStripeFill: tableTintColor(base, Math.max(0.5, stripeTint - 0.08)),
+        totalFill: tableTintColor(base, Math.min(0.78, stripeTint)),
+        totalFont: dark,
+        bodyFill: "",
+        bodyFont: ""
+      };
+    }
+
+    // Dark 系列表体本身也带底色；条纹使用较亮色调，保证仍有清晰层次。
+    return {
+      family,
+      headerFill: tableTintColor(base, -0.28),
+      headerFont: white,
+      stripeFill: tableTintColor(base, 0.42),
+      columnStripeFill: tableTintColor(base, 0.3),
+      totalFill: tableTintColor(base, -0.18),
+      totalFont: white,
+      bodyFill: tableTintColor(base, 0.58),
+      bodyFont: dark
+    };
+  }
+
+  /** 在带命名空间的 OOXML 中按 localName 读取直接子节点。 */
+  function xmlDirectChild(node, localName) {
+    return Array.from(node && node.children ? node.children : [])
+      .find((child) => child.localName === localName) || null;
+  }
+
+  /** 将 OOXML 颜色节点转成 colorToCss 可识别的 ExcelJS 风格对象。 */
+  function ooxmlColorModel(colorNode) {
+    if (!colorNode) return null;
+    const result = {};
+    const rgb = colorNode.getAttribute("rgb");
+    const theme = colorNode.getAttribute("theme");
+    const indexed = colorNode.getAttribute("indexed");
+    const tint = colorNode.getAttribute("tint");
+    if (rgb) result.argb = rgb;
+    if (theme != null && theme !== "") result.theme = Number(theme);
+    if (indexed != null && indexed !== "") result.indexed = Number(indexed);
+    if (tint != null && tint !== "") result.tint = Number(tint);
+    return Object.keys(result).length ? result : null;
+  }
+
+  /** OOXML 布尔属性既可能省略 val，也可能使用 0/1 或 true/false。 */
+  function ooxmlBoolean(node) {
+    if (!node) return false;
+    const value = node.getAttribute("val");
+    return value == null || value === "1" || value === "true";
+  }
+
+  /**
+   * 解析 styles.xml 中的 dxf（差异样式）。Excel 会用它记录超级表列的显示
+   * 线索，例如用户示例中的 theme + tint 背景；ExcelJS 读取工作簿时不会把
+   * dataDxfId 展开到单元格，因此必须从原始 XML 补读。
+   */
+  function parseOoxmlDxfStyle(dxfNode, themeColors) {
+    if (!dxfNode) return null;
+    const source = {};
+    const fillNode = xmlDirectChild(dxfNode, "fill");
+    const patternNode = xmlDirectChild(fillNode, "patternFill");
+    if (patternNode) {
+      source.fill = {
+        pattern: patternNode.getAttribute("patternType") || "",
+        fgColor: ooxmlColorModel(xmlDirectChild(patternNode, "fgColor")),
+        bgColor: ooxmlColorModel(xmlDirectChild(patternNode, "bgColor"))
+      };
+    }
+
+    const fontNode = xmlDirectChild(dxfNode, "font");
+    if (fontNode) {
+      const sizeNode = xmlDirectChild(fontNode, "sz");
+      const nameNode = xmlDirectChild(fontNode, "name");
+      const underlineNode = xmlDirectChild(fontNode, "u");
+      const underlineValue = underlineNode && underlineNode.getAttribute("val");
+      source.font = {
+        name: nameNode ? nameNode.getAttribute("val") || "" : "",
+        size: sizeNode ? Number(sizeNode.getAttribute("val")) : null,
+        bold: ooxmlBoolean(xmlDirectChild(fontNode, "b")),
+        italic: ooxmlBoolean(xmlDirectChild(fontNode, "i")),
+        // <u val="none"/> 明确表示无下划线，不能仅凭节点存在就判定为开启。
+        underline: Boolean(underlineNode) && underlineValue !== "none" && underlineValue !== "0",
+        strike: ooxmlBoolean(xmlDirectChild(fontNode, "strike")),
+        color: ooxmlColorModel(xmlDirectChild(fontNode, "color"))
+      };
+    }
+
+    const alignmentNode = xmlDirectChild(dxfNode, "alignment");
+    if (alignmentNode) {
+      source.alignment = {
+        horizontal: alignmentNode.getAttribute("horizontal") || "",
+        vertical: alignmentNode.getAttribute("vertical") || "",
+        wrapText: alignmentNode.getAttribute("wrapText") === "1",
+        textRotation: Number(alignmentNode.getAttribute("textRotation")) || 0
+      };
+    }
+
+    const borderNode = xmlDirectChild(dxfNode, "border");
+    if (borderNode) {
+      source.border = {};
+      for (const side of ["top", "right", "bottom", "left"]) {
+        const sideNode = xmlDirectChild(borderNode, side);
+        const style = sideNode && sideNode.getAttribute("style");
+        if (!style) continue;
+        source.border[side] = {
+          style,
+          color: ooxmlColorModel(xmlDirectChild(sideNode, "color"))
+        };
+      }
+    }
+
+    return normalizeCellStyle(source, themeColors);
+  }
+
+  /** 读取一个可选 dxf 编号，非法或越界编号安全地返回 null。 */
+  function dxfStyleByAttribute(node, attributeName, dxfStyles) {
+    const rawId = node && node.getAttribute(attributeName);
+    if (rawId == null || rawId === "") return null;
+    const id = Number(rawId);
+    return Number.isInteger(id) && id >= 0 ? dxfStyles[id] || null : null;
+  }
+
+  /**
+   * 从 XLSX ZIP 包直接读取 table*.xml 和 styles.xml。此步骤只解析格式元数据，
+   * 不执行宏、外部链接或公式。若 JSZip CDN 不可用或元数据损坏，则返回空映射，
+   * 主流程仍使用 ExcelJS 表模型和内置样式回退，不影响数据读取。
+   */
+  async function extractOoxmlTableMetadata(buffer, themeColors) {
+    const result = new Map();
+    if (typeof window.JSZip === "undefined") return result;
+
+    try {
+      const zip = await window.JSZip.loadAsync(buffer);
+      const parser = new DOMParser();
+      const stylesEntry = zip.file("xl/styles.xml");
+      const dxfStyles = [];
+      if (stylesEntry) {
+        const stylesXml = await stylesEntry.async("text");
+        const stylesDocument = parser.parseFromString(stylesXml, "application/xml");
+        const dxfsNode = Array.from(stylesDocument.getElementsByTagName("*"))
+          .find((node) => node.localName === "dxfs");
+        if (dxfsNode) {
+          for (const dxfNode of Array.from(dxfsNode.children).filter((node) => node.localName === "dxf")) {
+            dxfStyles.push(parseOoxmlDxfStyle(dxfNode, themeColors));
+          }
+        }
+      }
+
+      const tablePaths = Object.keys(zip.files)
+        .filter((path) => /^xl\/tables\/[^/]+\.xml$/i.test(path) && !zip.files[path].dir);
+      for (const path of tablePaths) {
+        const tableXml = await zip.files[path].async("text");
+        const tableDocument = parser.parseFromString(tableXml, "application/xml");
+        if (tableDocument.getElementsByTagName("parsererror").length) continue;
+        const tableNode = tableDocument.documentElement;
+        if (!tableNode || tableNode.localName !== "table") continue;
+
+        const styleNode = Array.from(tableDocument.getElementsByTagName("*"))
+          .find((node) => node.localName === "tableStyleInfo");
+        const columnNodes = Array.from(tableDocument.getElementsByTagName("*"))
+          .filter((node) => node.localName === "tableColumn");
+        const name = tableNode.getAttribute("name") || tableNode.getAttribute("displayName") || path;
+        result.set(name, {
+          name,
+          displayName: tableNode.getAttribute("displayName") || name,
+          range: parseRangeAddress(tableNode.getAttribute("ref")),
+          styleName: styleNode ? styleNode.getAttribute("name") || "" : "",
+          headerRow: tableNode.getAttribute("headerRowCount") !== "0",
+          totalsRow: tableNode.getAttribute("totalsRowCount") === "1",
+          showFirstColumn: styleNode ? styleNode.getAttribute("showFirstColumn") === "1" : false,
+          showLastColumn: styleNode ? styleNode.getAttribute("showLastColumn") === "1" : false,
+          showRowStripes: styleNode ? styleNode.getAttribute("showRowStripes") !== "0" : true,
+          showColumnStripes: styleNode ? styleNode.getAttribute("showColumnStripes") === "1" : false,
+          headerStyle: dxfStyleByAttribute(tableNode, "headerRowDxfId", dxfStyles),
+          dataStyle: dxfStyleByAttribute(tableNode, "dataDxfId", dxfStyles),
+          totalsStyle: dxfStyleByAttribute(tableNode, "totalsRowDxfId", dxfStyles),
+          columnStyles: columnNodes.map((node) => dxfStyleByAttribute(node, "dataDxfId", dxfStyles))
+        });
+      }
+    } catch (_metadataError) {
+      // 元数据增强失败不能导致整个工作簿回退到低保真的 SheetJS 解析。
+      return new Map();
+    }
+    return result;
+  }
+
+  /**
+   * ExcelJS 4.4.0 在读取外部文件后有时把省略的 headerRowCount 当成 false。
+   * 标准超级表默认包含表头，所以再用表第一行与 column.name 做一次可靠推断。
+   */
+  function inferTableHeaderRow(table, worksheet, range) {
+    if (table.headerRow === true) return true;
+    const columns = Array.isArray(table.columns) ? table.columns : [];
+    if (!columns.length || columns.length !== range.endCol - range.startCol + 1) {
+      return table.headerRow !== false;
+    }
+    return columns.every((column, offset) => {
+      const cell = worksheet.getCell(range.startRow + 1, range.startCol + offset + 1);
+      const cellText = cell && cell.text != null
+        ? String(cell.text)
+        : formatDisplayValue(cell && cell.value, cell && cell.numFmt);
+      return cellText.trim() === String(column && column.name != null ? column.name : "").trim();
+    });
+  }
+
+  /**
+   * 从工作表提取超级表定义。不同来源的 ExcelJS 工作表可能暴露 model.tables
+   * 或 getTables()，两种形式都兼容。自定义表样式没有可展开的完整规则，采用
+   * 当前主题的兼容配色，并在状态警告中明确说明。
+   */
+  function extractWorksheetTableStyles(worksheet, themeColors, warnings, ooxmlTables) {
+    let sourceTables = [];
+    if (worksheet && worksheet.model && Array.isArray(worksheet.model.tables)) {
+      sourceTables = worksheet.model.tables;
+    } else if (worksheet && typeof worksheet.getTables === "function") {
+      sourceTables = worksheet.getTables();
+    }
+
+    return sourceTables.map((entry, index) => {
+      const table = entry && (entry.model || entry.table || entry);
+      const tableName = table && (table.name || table.displayName);
+      const metadata = tableName && ooxmlTables instanceof Map
+        ? ooxmlTables.get(tableName) || null
+        : null;
+      const range = (metadata && metadata.range)
+        || parseRangeAddress(table && (table.tableRef || table.ref));
+      if (!table || !range) return null;
+
+      const style = table.style && typeof table.style === "object" ? table.style : {};
+      const styleName = (metadata && metadata.styleName) || style.theme || style.name || "";
+      let palette = createBuiltInTablePalette(styleName, themeColors);
+      if (!palette && styleName) {
+        // ExcelJS 本身不会提供自定义 tableStyle 的 dxf 规则；仍给予稳定的
+        // 主题色回退效果，避免整张超级表退化成无背景的普通网格。
+        palette = createBuiltInTablePalette("TableStyleMedium2", themeColors);
+        warnings.push(`工作表“${worksheet.name}”中的自定义超级表样式“${styleName}”已按兼容样式显示。`);
+      }
+      const metadataStyles = metadata
+        ? [metadata.dataStyle, ...(metadata.columnStyles || [])].filter(Boolean)
+        : [];
+      const exactFillStyle = metadataStyles.find((candidate) => candidate.fillColor);
+      if (!palette && exactFillStyle) {
+        palette = createBuiltInTablePalette("TableStyleMedium2", themeColors);
+      }
+      if (palette && exactFillStyle) {
+        // 某些 Excel 文件会在 tableColumn.dataDxfId 中保存实际主题+tint 底色。
+        // 该值比仅凭内置样式编号推断更精确，优先作为条纹/表头的色彩线索。
+        const exactFill = exactFillStyle.fillColor;
+        palette = {
+          ...palette,
+          stripeFill: exactFill,
+          columnStripeFill: exactFill,
+          headerFill: exactFill,
+          totalFill: exactFill,
+          headerFont: readableTextColor(exactFill),
+          totalFont: readableTextColor(exactFill)
+        };
+      }
+
+      return {
+        name: tableName || `Table ${index + 1}`,
+        range,
+        palette,
+        headerRow: metadata ? metadata.headerRow : inferTableHeaderRow(table, worksheet, range),
+        totalsRow: metadata ? metadata.totalsRow : Boolean(table.totalsRow),
+        showFirstColumn: metadata ? metadata.showFirstColumn : Boolean(style.showFirstColumn),
+        showLastColumn: metadata ? metadata.showLastColumn : Boolean(style.showLastColumn),
+        showRowStripes: metadata ? metadata.showRowStripes : style.showRowStripes !== false,
+        showColumnStripes: metadata ? metadata.showColumnStripes : Boolean(style.showColumnStripes),
+        headerStyle: metadata && metadata.headerStyle,
+        dataStyle: metadata && metadata.dataStyle,
+        totalsStyle: metadata && metadata.totalsStyle,
+        columnStyles: metadata ? metadata.columnStyles || [] : []
+      };
+    }).filter((table) => table && table.palette);
+  }
+
+  /** 按 WCAG 相对亮度近似选择黑/白文字，避免浅色表头被强制显示成白字。 */
+  function readableTextColor(cssColor) {
+    const hex = normalizeHexColor(cssColor).slice(-6);
+    if (hex.length !== 6) return "#1F2926";
+    const channels = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255)
+      .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
+    const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    return luminance > 0.46 ? "#1F2926" : "#FFFFFF";
+  }
+
+  /** 根据行列位置计算某个单元格应继承的超级表视觉样式。 */
+  function getTableCellStyle(tables, rowIndex, columnIndex) {
+    const table = tables.find((candidate) => (
+      rowIndex >= candidate.range.startRow && rowIndex <= candidate.range.endRow
+      && columnIndex >= candidate.range.startCol && columnIndex <= candidate.range.endCol
+    ));
+    if (!table) return null;
+
+    const { range, palette } = table;
+    const isHeader = table.headerRow && rowIndex === range.startRow;
+    const isTotal = table.totalsRow && rowIndex === range.endRow;
+    const bodyStart = range.startRow + (table.headerRow ? 1 : 0);
+    const bodyEnd = range.endRow - (table.totalsRow ? 1 : 0);
+    const isBody = rowIndex >= bodyStart && rowIndex <= bodyEnd;
+
+    let fillColor = "";
+    let fontColor = "";
+    let bold = false;
+    let stripeMatched = false;
+    if (isHeader) {
+      fillColor = palette.headerFill;
+      fontColor = palette.headerFont;
+      bold = true;
+    } else if (isTotal) {
+      fillColor = palette.totalFill;
+      fontColor = palette.totalFont;
+      bold = true;
+    } else if (isBody) {
+      fillColor = palette.bodyFill;
+      fontColor = palette.bodyFont;
+      const rowOffset = rowIndex - bodyStart;
+      const columnOffset = columnIndex - range.startCol;
+      // 同时启用行列条纹时，行条纹优先；未命中行条纹再叠加列条纹。
+      if (table.showRowStripes && rowOffset % 2 === 1) {
+        fillColor = palette.stripeFill;
+        stripeMatched = true;
+      } else if (table.showColumnStripes && columnOffset % 2 === 1) {
+        fillColor = palette.columnStripeFill;
+        stripeMatched = true;
+      }
+    }
+
+    if (table.showFirstColumn && columnIndex === range.startCol) bold = true;
+    if (table.showLastColumn && columnIndex === range.endCol) bold = true;
+
+    const columnStyle = table.columnStyles[columnIndex - range.startCol] || null;
+    const differentialStyle = isHeader
+      ? table.headerStyle
+      : isTotal
+        ? table.totalsStyle
+        : isBody
+          ? columnStyle || table.dataStyle
+          : null;
+    const result = { fillColor, fontColor, bold };
+    if (differentialStyle) {
+      // 表头/汇总行的 dxf 直接应用；数据区启用条纹时仅在条纹位置使用其
+      // 背景，避免 dataDxf 抹掉 Excel 表样式原有的隔行效果。
+      if (
+        differentialStyle.fillColor
+        && (isHeader || isTotal || stripeMatched || (!table.showRowStripes && !table.showColumnStripes))
+      ) {
+        result.fillColor = differentialStyle.fillColor;
+      }
+      if (differentialStyle.fontColor) result.fontColor = differentialStyle.fontColor;
+      if (differentialStyle.bold) result.bold = true;
+      for (const key of [
+        "fontName", "fontSize", "italic", "underline", "strike", "horizontal",
+        "vertical", "wrapText", "rotation", "fillPattern", "fillPatternColor"
+      ]) {
+        if (differentialStyle[key]) result[key] = differentialStyle[key];
+      }
+      if (differentialStyle.borders) result.borders = differentialStyle.borders;
+    }
+    return result;
+  }
+
+  /**
+   * 超级表样式属于区域级默认样式；单元格自身显式设置的字体和填充优先。
+   * 仅填补 cell.style 中缺失的字段，可避免覆盖用户手工标记的背景色。
+   */
+  function mergeTableAndCellStyle(tableStyle, cellStyle) {
+    if (!tableStyle) return cellStyle;
+    const result = cellStyle ? { ...cellStyle } : {
+      fontName: "",
+      fontSize: null,
+      bold: false,
+      italic: false,
+      underline: false,
+      strike: false,
+      fontColor: "",
+      fillColor: "",
+      fillPattern: "",
+      fillPatternColor: "",
+      horizontal: "",
+      vertical: "",
+      wrapText: false,
+      rotation: 0,
+      borders: { top: null, right: null, bottom: null, left: null }
+    };
+    if (!result.fillColor && tableStyle.fillColor) result.fillColor = tableStyle.fillColor;
+    if (!result.fontColor && tableStyle.fontColor) result.fontColor = tableStyle.fontColor;
+    if (tableStyle.bold) result.bold = true;
+    // 差异样式中的对齐、字体和边框也属于超级表视觉的一部分，但仍只填补
+    // 普通单元格未声明的字段，确保手工单元格样式拥有最高优先级。
+    for (const key of [
+      "fontName", "fontSize", "italic", "underline", "strike", "horizontal",
+      "vertical", "wrapText", "rotation", "fillPattern", "fillPatternColor"
+    ]) {
+      if (!result[key] && tableStyle[key]) result[key] = tableStyle[key];
+    }
+    if (tableStyle.borders) {
+      result.borders = result.borders || { top: null, right: null, bottom: null, left: null };
+      for (const side of ["top", "right", "bottom", "left"]) {
+        if (!result.borders[side] && tableStyle.borders[side]) {
+          result.borders[side] = tableStyle.borders[side];
+        }
+      }
+    }
+    return result;
   }
 
   /**
    * 只通过 element.style 设置经过白名单筛选的属性。
    * 单元格值始终使用 textContent，不能借样式或内容注入 HTML。
    */
-  function applyCellStyle(element, style) {
+  function applyCellStyle(element, style, options) {
     if (!style) return;
     if (style.fontName) element.style.fontFamily = style.fontName;
     // Excel 字号单位为磅，按 96 DPI 换算为 CSS 像素。
@@ -480,6 +1145,26 @@
     }
     if (style.fontColor) element.style.color = style.fontColor;
     if (style.fillColor) element.style.backgroundColor = style.fillColor;
+    if (style.fillPattern && style.fillPatternColor) {
+      // CSS 没有 Excel 图案填充的直接等价物，使用小尺寸渐变近似常见纹理。
+      // solid 填充不经过这里，因此不会影响绝大多数工作簿的精确底色。
+      const color = style.fillPatternColor;
+      const patternMap = {
+        darkHorizontal: `repeating-linear-gradient(0deg, ${color} 0 2px, transparent 2px 4px)`,
+        lightHorizontal: `repeating-linear-gradient(0deg, ${color} 0 1px, transparent 1px 5px)`,
+        darkVertical: `repeating-linear-gradient(90deg, ${color} 0 2px, transparent 2px 4px)`,
+        lightVertical: `repeating-linear-gradient(90deg, ${color} 0 1px, transparent 1px 5px)`,
+        darkDown: `repeating-linear-gradient(45deg, ${color} 0 2px, transparent 2px 5px)`,
+        lightDown: `repeating-linear-gradient(45deg, ${color} 0 1px, transparent 1px 6px)`,
+        darkUp: `repeating-linear-gradient(-45deg, ${color} 0 2px, transparent 2px 5px)`,
+        lightUp: `repeating-linear-gradient(-45deg, ${color} 0 1px, transparent 1px 6px)`,
+        darkGrid: `repeating-linear-gradient(0deg, ${color} 0 1px, transparent 1px 5px), repeating-linear-gradient(90deg, ${color} 0 1px, transparent 1px 5px)`,
+        lightGrid: `repeating-linear-gradient(0deg, ${color} 0 1px, transparent 1px 7px), repeating-linear-gradient(90deg, ${color} 0 1px, transparent 1px 7px)`,
+        darkTrellis: `repeating-linear-gradient(45deg, ${color} 0 1px, transparent 1px 6px), repeating-linear-gradient(-45deg, ${color} 0 1px, transparent 1px 6px)`,
+        lightTrellis: `repeating-linear-gradient(45deg, ${color} 0 1px, transparent 1px 8px), repeating-linear-gradient(-45deg, ${color} 0 1px, transparent 1px 8px)`
+      };
+      element.style.backgroundImage = patternMap[style.fillPattern] || "";
+    }
     if (style.horizontal) {
       const alignmentMap = { center: "center", right: "flex-end", left: "flex-start", justify: "space-between" };
       element.style.justifyContent = alignmentMap[style.horizontal] || "flex-start";
@@ -499,6 +1184,13 @@
       element.style.transform = `rotate(${clamp(style.rotation, -90, 90)}deg)`;
     }
     for (const side of ["top", "right", "bottom", "left"]) {
+      /*
+       * 原始视图中的相邻单元格通常同时带有“上+下”或“左+右”边框。
+       * separate 表格若四边都画，会把共享线叠成双倍宽；而 collapse 又会让
+       * 表体边框影响粘性列标题。原始单元格因此统一由前一个单元格的右边框、
+       * 上一行的下边框表示共享线，本单元格跳过 top/left。
+       */
+      if (options && options.omitSharedLeadingBorders && (side === "top" || side === "left")) continue;
       const border = style.borders && style.borders[side];
       if (border) {
         element.style[`border${side[0].toUpperCase()}${side.slice(1)}`] =
@@ -616,7 +1308,13 @@
 
     const workbook = new window.ExcelJS.Workbook();
     await workbook.xlsx.load(buffer);
+    // ExcelJS 会保留 theme1.xml，但不会替我们把 theme+tint 解析成最终 RGB。
+    // 在遍历单元格前建立颜色表，供字体、边框和填充共用。
+    const themeColors = extractThemeColors(workbook);
+    // 额外读取 XLSX 包中的 table/dataDxf 元数据，补足 ExcelJS 未展开的超级表样式。
+    const ooxmlTables = await extractOoxmlTableMetadata(buffer, themeColors);
     const sheets = [];
+    const warnings = [];
 
     workbook.eachSheet((worksheet) => {
       const rowCount = Math.max(worksheet.actualRowCount || 0, worksheet.rowCount || 0);
@@ -625,8 +1323,18 @@
         : [];
       const mergeMaxRow = mergeRanges.reduce((max, range) => Math.max(max, range.endRow + 1), 0);
       const mergeMaxCol = mergeRanges.reduce((max, range) => Math.max(max, range.endCol + 1), 0);
-      const maxRows = Math.max(rowCount, mergeMaxRow);
-      const maxCols = Math.max(worksheet.actualColumnCount || 0, worksheet.columnCount || 0, mergeMaxCol, 1);
+      // 超级表的样式存储在区域级 table 模型中，必须先提取，再逐格与 cell.style 合并。
+      const tableStyles = extractWorksheetTableStyles(worksheet, themeColors, warnings, ooxmlTables);
+      const tableMaxRow = tableStyles.reduce((max, table) => Math.max(max, table.range.endRow + 1), 0);
+      const tableMaxCol = tableStyles.reduce((max, table) => Math.max(max, table.range.endCol + 1), 0);
+      const maxRows = Math.max(rowCount, mergeMaxRow, tableMaxRow);
+      const maxCols = Math.max(
+        worksheet.actualColumnCount || 0,
+        worksheet.columnCount || 0,
+        mergeMaxCol,
+        tableMaxCol,
+        1
+      );
       assertSafeDimensions(maxRows, maxCols);
 
       const rows = [];
@@ -636,12 +1344,15 @@
         const cells = new Array(maxCols).fill(null);
         for (let columnIndex = 0; columnIndex < maxCols; columnIndex += 1) {
           const cell = worksheetRow.getCell(columnIndex + 1);
-          if (cell.value == null && !cell.hasStyle) continue;
+          const tableStyle = getTableCellStyle(tableStyles, rowIndex, columnIndex);
+          // 超级表中的空白格仍可能有表头/条纹背景，不能因没有值而跳过。
+          if (cell.value == null && !cell.hasStyle && !tableStyle) continue;
           const value = excelJsCellValue(cell);
+          const cellStyle = normalizeCellStyle(cell.style, themeColors);
           cells[columnIndex] = buildCell(
             value.text,
             value.raw,
-            normalizeCellStyle(cell.style),
+            mergeTableAndCellStyle(tableStyle, cellStyle),
             { formulaMissing: value.formulaMissing }
           );
         }
@@ -665,12 +1376,13 @@
         rowHeights,
         colWidths: normalizeColumnWidths(widths, maxCols),
         merges: mergeRanges,
-        source: "exceljs"
+        source: "exceljs",
+        tableStyleCount: tableStyles.length
       }));
     });
 
     if (!sheets.length) throw new Error("工作簿中没有可显示的工作表。");
-    return { name: fileName, type: fileExtension(fileName) || "xlsx", sheets, warnings: [] };
+    return { name: fileName, type: fileExtension(fileName) || "xlsx", sheets, warnings };
   }
 
   function assertSafeDimensions(rows, columns) {
@@ -987,12 +1699,15 @@
     updateRawSearchControls();
     dom.viewport.scrollTop = 0;
     dom.viewport.scrollLeft = 0;
+    dom.viewport.classList.remove("is-raw-fit");
   }
 
-  function setWorkbook(workbook, byteLength, sourcePath) {
+  function setWorkbook(workbook, byteLength, sourcePath, autoFit) {
     state.workbook = workbook;
     state.sheetIndex = 0;
     state.view = "raw";
+    // 本地文件、直接 URL 或未配置 autoFit 的文件默认关闭自适应。
+    state.rawFitEnabled = autoFit === true;
     resetViewState();
 
     dom.viewerCard.classList.remove("is-empty");
@@ -1000,6 +1715,8 @@
     dom.viewport.hidden = false;
     dom.sheetBar.hidden = false;
     dom.fileName.textContent = workbook.name;
+    // 标签页标题直接使用当前打开文件的显示名称，方便同时打开多个文件时快速区分。
+    document.title = workbook.name;
     dom.fileMeta.textContent = [
       formatBytes(byteLength),
       `${workbook.sheets.length} 个工作表`,
@@ -1054,7 +1771,9 @@
     state.rawMatchLookup = new Map();
     state.rawMatchIndex = -1;
     state.sort = { column: -1, direction: null };
+    state.rawFitEnabled = false;
     state.renderer = null;
+    dom.viewport.classList.remove("is-raw-fit");
 
     dom.search.value = "";
     dom.search.disabled = true;
@@ -1077,6 +1796,7 @@
 
     dom.fileName.textContent = "尚未打开文件";
     dom.fileMeta.textContent = "请选择本地文件或加载在线文件";
+    document.title = DEFAULT_PAGE_TITLE;
     dom.viewerCard.classList.add("is-empty");
     dom.sourcePanel.hidden = false;
     dom.sourcePanel.scrollTop = 0;
@@ -1152,6 +1872,8 @@
     dom.body.replaceChildren();
     dom.header.hidden = false;
     dom.body.hidden = false;
+    // 自适应时禁止横向滚动；切换到数据视图或恢复原宽后立即恢复正常滚动。
+    dom.viewport.classList.toggle("is-raw-fit", state.view === "raw" && state.rawFitEnabled);
     // 两种视图都支持搜索：数据视图过滤行，原始视图只高亮匹配单元格。
     dom.search.disabled = false;
 
@@ -1171,11 +1893,57 @@
   /* 5. 原始视图、数据视图与虚拟滚动                                         */
   /* ======================================================================== */
 
-  function gridTemplate(sheet, columns) {
+  /**
+   * 计算原始视图的显示列宽。
+   * 开启自适应后只使用一个统一缩放系数，所以各列仍严格保持 Excel 原宽比例；
+   * 行号列固定不参与缩放，剩余宽度全部交给数据列。
+   */
+  function rawDisplayWidths(sheet, columns) {
+    const originalWidths = columns.map((columnIndex) => sheet.colWidths[columnIndex].width);
+    if (!state.rawFitEnabled || state.view !== "raw") return originalWidths;
+
+    const originalTotal = originalWidths.reduce((sum, width) => sum + width, 0);
+    const availableWidth = Math.max(
+      1,
+      dom.viewport.clientWidth - ROW_NUMBER_WIDTH - RAW_FIT_WIDTH_GUARD
+    );
+    if (!originalTotal || !Number.isFinite(availableWidth)) return originalWidths;
+    const scale = availableWidth / originalTotal;
+    return originalWidths.map((width) => Math.max(1, Math.round(width * scale * 100) / 100));
+  }
+
+  function gridTemplate(sheet, columns, useRawFit) {
+    const widths = useRawFit ? rawDisplayWidths(sheet, columns) : columns.map((index) => sheet.colWidths[index].width);
     return [
       `${ROW_NUMBER_WIDTH}px`,
-      ...columns.map((columnIndex) => `${sheet.colWidths[columnIndex].width}px`)
+      ...widths.map((width) => `${width}px`)
     ].join(" ");
+  }
+
+  /** 创建左上角自适应按钮；SVG 为页面自身图标，不依赖字体或外部图片。 */
+  function createRawFitToggle() {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `raw-fit-toggle${state.rawFitEnabled ? " is-active" : ""}`;
+    button.setAttribute("aria-pressed", String(state.rawFitEnabled));
+    button.setAttribute("aria-label", state.rawFitEnabled ? "关闭表格自适应" : "开启表格自适应");
+    button.title = state.rawFitEnabled ? "恢复 Excel 原始列宽" : "按原列宽比例适应可视区域";
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M8 7 3 12l5 5M3 12h18M16 7l5 5-5 5");
+    svg.appendChild(path);
+    button.appendChild(svg);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.rawFitEnabled = !state.rawFitEnabled;
+      dom.viewport.scrollLeft = 0;
+      renderCurrentSheet();
+    });
+    return button;
   }
 
   function visibleColumnIndices(sheet) {
@@ -1285,7 +2053,7 @@
       columns,
       rows: renderRows,
       heights: renderRows.map((row) => row.height),
-      template: gridTemplate(sheet, columns)
+      template: gridTemplate(sheet, columns, true)
     });
     setSheetStatus(sheet, true, rows.length);
   }
@@ -1296,6 +2064,13 @@
     dom.body.hidden = true;
     const table = document.createElement("table");
     table.className = "raw-table";
+    // 标准 table 在设置 min-width: 100% 时会按比例拉宽行号列；固定实际总宽可避免该问题。
+    const visibleColumns = visibleColumnIndices(sheet);
+    const displayedWidths = rawDisplayWidths(sheet, visibleColumns);
+    const displayedWidthByColumn = new Map(
+      visibleColumns.map((columnIndex, index) => [columnIndex, displayedWidths[index]])
+    );
+    table.style.width = `${ROW_NUMBER_WIDTH + displayedWidths.reduce((sum, width) => sum + width, 0)}px`;
     const colgroup = document.createElement("colgroup");
     const numberColumn = document.createElement("col");
     numberColumn.style.width = `${ROW_NUMBER_WIDTH}px`;
@@ -1303,7 +2078,7 @@
     for (let columnIndex = 0; columnIndex < sheet.maxCols; columnIndex += 1) {
       const column = document.createElement("col");
       const metadata = sheet.colWidths[columnIndex];
-      column.style.width = `${metadata.width}px`;
+      column.style.width = `${metadata.hidden ? 0 : displayedWidthByColumn.get(columnIndex) || metadata.width}px`;
       if (metadata.hidden) column.style.display = "none";
       colgroup.appendChild(column);
     }
@@ -1311,7 +2086,10 @@
 
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    headerRow.appendChild(document.createElement("th"));
+    const cornerHeader = document.createElement("th");
+    cornerHeader.className = "raw-fit-corner";
+    cornerHeader.appendChild(createRawFitToggle());
+    headerRow.appendChild(cornerHeader);
     for (let columnIndex = 0; columnIndex < sheet.maxCols; columnIndex += 1) {
       const header = document.createElement("th");
       header.textContent = columnLetter(columnIndex);
@@ -1338,7 +2116,7 @@
         const td = document.createElement("td");
         const cell = row.cells[columnIndex];
         setCellContent(td, cell);
-        applyCellStyle(td, cell && cell.style);
+        applyCellStyle(td, cell && cell.style, { omitSharedLeadingBorders: true });
         prepareInteractiveCell(td, cell, row.sourceIndex, columnIndex, true);
         if (sheet.colWidths[columnIndex].hidden) td.style.display = "none";
         if (merge) {
@@ -1354,8 +2132,12 @@
   }
 
   function renderRawHeader(sheet, columns) {
-    dom.header.style.gridTemplateColumns = gridTemplate(sheet, columns);
-    dom.header.appendChild(createHeaderCell("", -1, false, true));
+    dom.header.style.gridTemplateColumns = gridTemplate(sheet, columns, true);
+    const cornerHeader = createHeaderCell("", -1, false, true);
+    cornerHeader.classList.add("raw-fit-corner");
+    // createHeaderCell 默认带一个文本 span；角标只保留图标按钮，避免多余节点占宽。
+    cornerHeader.replaceChildren(createRawFitToggle());
+    dom.header.appendChild(cornerHeader);
     for (const columnIndex of columns) {
       dom.header.appendChild(createHeaderCell(columnLetter(columnIndex), columnIndex, false, false));
     }
@@ -1496,8 +2278,9 @@
     renderCurrentSheet();
   }
 
-  function templateWidth(sheet, columns) {
-    return ROW_NUMBER_WIDTH + columns.reduce((sum, index) => sum + sheet.colWidths[index].width, 0);
+  function templateWidth(sheet, columns, useRawFit) {
+    const widths = useRawFit ? rawDisplayWidths(sheet, columns) : columns.map((index) => sheet.colWidths[index].width);
+    return ROW_NUMBER_WIDTH + widths.reduce((sum, width) => sum + width, 0);
   }
 
   /**
@@ -1531,7 +2314,7 @@
     model.lastRange = "";
     state.renderer = model;
     dom.body.style.height = `${model.totalHeight}px`;
-    dom.body.style.width = `${templateWidth(model.sheet, model.columns)}px`;
+    dom.body.style.width = `${templateWidth(model.sheet, model.columns, model.kind === "raw")}px`;
     renderVirtualWindow(true);
   }
 
@@ -1613,7 +2396,7 @@
       let cell = options.entry.sourceRow.cells[columnIndex];
       if (merge && merge.range.endRow > merge.range.startRow && !merge.master) cell = null;
       setCellContent(cellElement, cell);
-      applyCellStyle(cellElement, cell && cell.style);
+      applyCellStyle(cellElement, cell && cell.style, { omitSharedLeadingBorders: true });
       prepareInteractiveCell(cellElement, cell, rowIndex, columnIndex, true);
 
       if (merge && merge.master && merge.range.endRow === merge.range.startRow) {
@@ -1668,10 +2451,11 @@
 
         const columnPosition = renderer.columns.indexOf(match.columnIndex);
         if (columnPosition >= 0) {
-          const cellLeft = ROW_NUMBER_WIDTH + renderer.columns
+          const displayWidths = rawDisplayWidths(renderer.sheet, renderer.columns);
+          const cellLeft = ROW_NUMBER_WIDTH + displayWidths
             .slice(0, columnPosition)
-            .reduce((sum, index) => sum + renderer.sheet.colWidths[index].width, 0);
-          const cellWidth = renderer.sheet.colWidths[match.columnIndex].width;
+            .reduce((sum, width) => sum + width, 0);
+          const cellWidth = displayWidths[columnPosition];
           dom.viewport.scrollLeft = Math.max(0, cellLeft - (dom.viewport.clientWidth - cellWidth) / 2);
         }
         renderer.lastRange = "";
@@ -1717,6 +2501,7 @@
       `${rowCount.toLocaleString()} 行 × ${sheet.maxCols.toLocaleString()} 列`,
       virtual ? "已启用虚拟滚动" : "完整渲染"
     ];
+    if (state.rawFitEnabled) parts.push("已按比例适应宽度");
     if (state.searchText.trim()) {
       const total = state.rawMatches.length;
       const current = total && state.rawMatchIndex >= 0 ? state.rawMatchIndex + 1 : 0;
@@ -1749,14 +2534,14 @@
   /* 6. 本地文件、远程 URL 和页面事件                                         */
   /* ======================================================================== */
 
-  async function loadArrayBuffer(buffer, fileName, typeHint, byteLength, sequence, sourcePath) {
+  async function loadArrayBuffer(buffer, fileName, typeHint, byteLength, sequence, sourcePath, autoFit) {
     showLoading("正在解析工作表", `${fileName} · ${formatBytes(byteLength)}`);
     setStatus("正在读取文件内容…");
     await nextPaint();
     try {
       const workbook = await parseWorkbook(buffer, fileName, typeHint);
       if (sequence !== state.loadSequence) return;
-      setWorkbook(workbook, byteLength, sourcePath);
+      setWorkbook(workbook, byteLength, sourcePath, autoFit);
     } catch (error) {
       if (sequence !== state.loadSequence) return;
       showLoadError(error, fileName);
@@ -1778,7 +2563,7 @@
       const buffer = await file.arrayBuffer();
       if (sequence !== state.loadSequence) return;
       // 浏览器不会暴露本地文件的真实可读取路径，因此本地文件成功打开后清除 URL 参数。
-      await loadArrayBuffer(buffer, file.name, "", file.size, sequence, "");
+      await loadArrayBuffer(buffer, file.name, "", file.size, sequence, "", false);
     } catch (error) {
       if (sequence !== state.loadSequence) return;
       hideLoading();
@@ -1814,7 +2599,15 @@
       if (sequence !== state.loadSequence) return;
       const responseName = fileNameFromDisposition(response.headers.get("content-disposition")) || fileName;
       // 保存用户实际输入或配置中的路径；相对路径不会被强制改写成绝对地址。
-      await loadArrayBuffer(buffer, responseName, item && item.type, buffer.byteLength, sequence, trimmedUrl);
+      await loadArrayBuffer(
+        buffer,
+        responseName,
+        item && item.type,
+        buffer.byteLength,
+        sequence,
+        trimmedUrl,
+        Boolean(item && item.autoFit)
+      );
     } catch (error) {
       if (error.name === "AbortError") return;
       if (sequence !== state.loadSequence) return;
@@ -1856,7 +2649,8 @@
 
   /**
    * 清理 config.js 或远程 JSON 中的预置文件项。
-   * id、name、url 缺一不可；type 和 action 只接受已知值，避免异常清单污染状态。
+   * id、name、url 缺一不可；type 和 action 只接受已知值。
+   * autoFit 只有严格为 true 时才开启，缺省或其他值一律按 false 处理。
    */
   function normalizePresetFiles(files) {
     if (!Array.isArray(files)) return [];
@@ -1871,7 +2665,8 @@
         name: String(item.name).trim(),
         url: String(item.url).trim(),
         type: supportedTypes.has(type) ? type : "",
-        action: String(item.action || "").trim().toLowerCase()
+        action: String(item.action || "").trim().toLowerCase(),
+        autoFit: item.autoFit === true
       });
       return result;
     }, []);
@@ -2101,10 +2896,17 @@
   }, { passive: true });
 
   window.addEventListener("resize", () => {
-    if (!state.renderer || state.renderFrame) return;
+    if (!state.workbook || state.renderFrame) return;
     state.renderFrame = requestAnimationFrame(() => {
       state.renderFrame = 0;
-      renderVirtualWindow(true);
+      if (state.view === "raw" && state.rawFitEnabled) {
+        // 自适应依赖视口实时宽度，横竖屏切换或窗口缩放后重新计算所有列宽。
+        const scrollTop = dom.viewport.scrollTop;
+        renderCurrentSheet();
+        dom.viewport.scrollTop = scrollTop;
+      } else if (state.renderer) {
+        renderVirtualWindow(true);
+      }
     });
   });
 

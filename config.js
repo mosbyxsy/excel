@@ -15,24 +15,27 @@ window.EXCEL_VIEWER_CONFIG = {
    * - url：文件地址，可以是同源相对地址或允许 CORS 的完整 URL；
    * - type：可选，支持 xlsx、xlsm、xls、csv。省略时根据地址和文件签名判断。
    * - action：可选；设置为 "open" 时页面启动后默认打开该文件。
+   * - autoFit：可选；true 表示打开后默认按原列宽比例适应可视区域，默认 false。
    *
    * 通过 ?config= 加载的远程 JSON 也使用 { files: [] } 结构和相同字段。
    * 若合并后的列表中有多个 action: "open"，页面只打开排列在最前面的一个。
    *
    * 示例：
-   * { id: "report", name: "月度报表", url: "/files/report.xlsx", type: "xlsx" }
+   * { id: "report", name: "月度报表", url: "/files/report.xlsx", type: "xlsx", autoFit: false }
    */
   files: [{
     id: "local_id_1",
     name: "IDE编辑器快捷键",
     url: "/excel/ide_key.xlsx",
     type: "xlsx",
-    action: "open"
+    action: "open",
+    autoFit: false
   }, {
     id: "local_id_2",
     name: "Edge浏览器快捷键",
     url: "/excel/edge_key.xlsx",
-    type: "xlsx"
+    type: "xlsx",
+    autoFit: false
   }],
 
   /** 页面打开后自动加载的预置文件 id；null 表示不自动加载。 */
