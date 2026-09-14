@@ -33,8 +33,13 @@
   const DATA_ROW_HEIGHT = 38;
   const DEFAULT_RAW_ROW_HEIGHT = 28;
   const ROW_NUMBER_WIDTH = 42;
+  const RAW_HEADER_HEIGHT = 38;
   // 预留一个物理像素，规避 table 边框与小数列宽舍入造成的 1px 横向溢出。
   const RAW_FIT_WIDTH_GUARD = 1;
+  // Excel 允许的列宽上限约为 255 个字符；换算后通常不足 1800px。
+  // 这里只对损坏文件设置宽松安全线，不参与正常工作簿的列宽调整。
+  const MAX_RAW_COLUMN_WIDTH = 4096;
+  // 数据视图以检索和排序为主，继续使用可读性范围；原始视图不使用这两个限制。
   const MIN_COLUMN_WIDTH = 64;
   const MAX_COLUMN_WIDTH = 420;
   const DEFAULT_PAGE_TITLE = "轻表格 · Excel / CSV 查看器";
@@ -115,6 +120,9 @@
     sort: { column: -1, direction: null },
     // 原始视图是否按当前视口宽度等比缩放所有可见列；每次打开文件时由文件配置初始化。
     rawFitEnabled: false,
+    // 点击行号/列号可固定多个轴；Set 便于切换状态并避免重复项。
+    pinnedRows: new Set(),
+    pinnedColumns: new Set(),
     copyEnabled: false,
     copyToastTimer: 0,
     renderer: null,
@@ -354,19 +362,38 @@
     return clamp(Math.round(value * 96 / 72), 20, 240);
   }
 
-  /** Excel 列宽并非像素，常用近似式 width * 7 + 5 对浏览器展示足够稳定。 */
+  /**
+   * Excel 列宽以默认字体中“0”字符的宽度为单位，并额外包含约 5px 边距。
+   * 这里采用 Calibri/Arial 常见的 7px 最大数字宽度进行 OOXML 近似换算。
+   *
+   * 原始视图必须保留窄列和宽列的比例，因此不再使用数据视图的 64~420px
+   * 可读性限制；仅以 4096px 防御损坏文件中的异常值。
+   */
   function excelWidthToPixels(width) {
     const value = Number(width);
     if (!Number.isFinite(value) || value <= 0) return 120;
-    return clamp(Math.round(value * 7 + 5), MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
+    const maximumDigitWidth = 7;
+    const contentPixels = Math.floor(
+      ((256 * value + Math.floor(128 / maximumDigitWidth)) / 256) * maximumDigitWidth
+    );
+    return clamp(contentPixels + 5, 1, MAX_RAW_COLUMN_WIDTH);
   }
 
+  /**
+   * 同时缓存两套宽度：
+   * - width：Excel 原始宽度换算结果，供原始视图和自适应比例计算；
+   * - dataWidth：限制后的交互宽度，供数据视图使用。
+   *
+   * 这样原始视图不会因可读性下限放大窄列，自适应模式也能基于真实比例缩放。
+   */
   function normalizeColumnWidths(widths, count) {
     const result = [];
     for (let index = 0; index < count; index += 1) {
       const column = widths[index] || {};
+      const rawWidth = clamp(Number(column.width) || 120, 1, MAX_RAW_COLUMN_WIDTH);
       result.push({
-        width: column.hidden ? 0 : clamp(column.width || 120, 0, MAX_COLUMN_WIDTH),
+        width: column.hidden ? 0 : rawWidth,
+        dataWidth: column.hidden ? 0 : clamp(rawWidth, MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH),
         hidden: Boolean(column.hidden)
       });
     }
@@ -712,6 +739,41 @@
     }
 
     if (family === "medium") {
+      /**
+       * Medium 14 使用强调色 6，并以“主题色 / 浅色 60% / 浅色 80%”
+       * 分别绘制表头、第一种数据行和第二种数据行。它不是灰蓝色样式。
+       *
+       * 默认 Office 主题的三个标准色是 #70AD47、#C6E0B4、#E2EFDA；
+       * 自定义主题则继续根据工作簿中的 accent6 计算对应的浅色。
+       */
+      if (number === 14) {
+        const accent6 = tableThemeBaseColor(themeColors, number);
+        const isDefaultOfficeAccent6 = normalizeHexColor(accent6).slice(-6).toUpperCase() === "70AD47";
+        const mediumFill = isDefaultOfficeAccent6 ? "#C6E0B4" : tableTintColor(accent6, 0.6);
+        const lightFill = isDefaultOfficeAccent6 ? "#E2EFDA" : tableTintColor(accent6, 0.8);
+        // Excel 的 Medium 14 使用白色分隔线，而不是查看器默认的灰绿色网格线。
+        const whiteDivider = { width: 1, style: "solid", color: "#FFFFFF" };
+        return {
+          family,
+          headerFill: `#${normalizeHexColor(accent6).slice(-6)}`,
+          headerFont: white,
+          // getTableCellStyle 从第二条数据行开始命中 stripeFill，故基础行
+          // 使用 60% 浅色、隔行使用 80% 浅色，顺序与 Excel 完全一致。
+          stripeFill: lightFill,
+          columnStripeFill: lightFill,
+          totalFill: `#${normalizeHexColor(accent6).slice(-6)}`,
+          totalFont: white,
+          // 两种数据行都具有显式绿色填充，不能把其中一组退化成透明背景。
+          bodyFill: mediumFill,
+          bodyFont: "#000000",
+          borders: {
+            top: null,
+            right: whiteDivider,
+            bottom: whiteDivider,
+            left: null
+          }
+        };
+      }
       // Medium 系列通常使用纯主题色表头，并用浅色主题填充隔行/隔列。
       const stripeTints = [0.82, 0.74, 0.88, 0.66];
       const stripeTint = stripeTints[group] == null ? 0.82 : stripeTints[group];
@@ -950,32 +1012,32 @@
       const style = table.style && typeof table.style === "object" ? table.style : {};
       const styleName = (metadata && metadata.styleName) || style.theme || style.name || "";
       let palette = createBuiltInTablePalette(styleName, themeColors);
-      if (!palette && styleName) {
-        // ExcelJS 本身不会提供自定义 tableStyle 的 dxf 规则；仍给予稳定的
-        // 主题色回退效果，避免整张超级表退化成无背景的普通网格。
+      const hasExactDifferentialStyle = Boolean(metadata && (
+        metadata.headerStyle
+        || metadata.dataStyle
+        || metadata.totalsStyle
+        || (metadata.columnStyles || []).some(Boolean)
+      ));
+      if (!palette && hasExactDifferentialStyle) {
+        // 自定义样式没有内置名称可供推导时，只创建一个无色基础方案；
+        // 后续按 header/data/total/column 的真实 dxf 分区逐格应用。
         palette = createBuiltInTablePalette("TableStyleMedium2", themeColors);
-        warnings.push(`工作表“${worksheet.name}”中的自定义超级表样式“${styleName}”已按兼容样式显示。`);
-      }
-      const metadataStyles = metadata
-        ? [metadata.dataStyle, ...(metadata.columnStyles || [])].filter(Boolean)
-        : [];
-      const exactFillStyle = metadataStyles.find((candidate) => candidate.fillColor);
-      if (!palette && exactFillStyle) {
-        palette = createBuiltInTablePalette("TableStyleMedium2", themeColors);
-      }
-      if (palette && exactFillStyle) {
-        // 某些 Excel 文件会在 tableColumn.dataDxfId 中保存实际主题+tint 底色。
-        // 该值比仅凭内置样式编号推断更精确，优先作为条纹/表头的色彩线索。
-        const exactFill = exactFillStyle.fillColor;
         palette = {
           ...palette,
-          stripeFill: exactFill,
-          columnStripeFill: exactFill,
-          headerFill: exactFill,
-          totalFill: exactFill,
-          headerFont: readableTextColor(exactFill),
-          totalFont: readableTextColor(exactFill)
+          headerFill: "",
+          headerFont: "",
+          stripeFill: "",
+          columnStripeFill: "",
+          totalFill: "",
+          totalFont: "",
+          bodyFill: "",
+          bodyFont: ""
         };
+      } else if (!palette && styleName) {
+        // 文件没有提供可读取的 dxf 时才使用通用兼容色；不能让兼容色优先于
+        // 工作簿自身携带的差异样式，否则会再次出现整表颜色被替换的问题。
+        palette = createBuiltInTablePalette("TableStyleMedium2", themeColors);
+        warnings.push(`工作表“${worksheet.name}”中的自定义超级表样式“${styleName}”已按兼容样式显示。`);
       }
 
       return {
@@ -996,16 +1058,6 @@
     }).filter((table) => table && table.palette);
   }
 
-  /** 按 WCAG 相对亮度近似选择黑/白文字，避免浅色表头被强制显示成白字。 */
-  function readableTextColor(cssColor) {
-    const hex = normalizeHexColor(cssColor).slice(-6);
-    if (hex.length !== 6) return "#1F2926";
-    const channels = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255)
-      .map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
-    const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
-    return luminance > 0.46 ? "#1F2926" : "#FFFFFF";
-  }
-
   /** 根据行列位置计算某个单元格应继承的超级表视觉样式。 */
   function getTableCellStyle(tables, rowIndex, columnIndex) {
     const table = tables.find((candidate) => (
@@ -1024,7 +1076,6 @@
     let fillColor = "";
     let fontColor = "";
     let bold = false;
-    let stripeMatched = false;
     if (isHeader) {
       fillColor = palette.headerFill;
       fontColor = palette.headerFont;
@@ -1041,10 +1092,8 @@
       // 同时启用行列条纹时，行条纹优先；未命中行条纹再叠加列条纹。
       if (table.showRowStripes && rowOffset % 2 === 1) {
         fillColor = palette.stripeFill;
-        stripeMatched = true;
       } else if (table.showColumnStripes && columnOffset % 2 === 1) {
         fillColor = palette.columnStripeFill;
-        stripeMatched = true;
       }
     }
 
@@ -1059,14 +1108,17 @@
         : isBody
           ? columnStyle || table.dataStyle
           : null;
-    const result = { fillColor, fontColor, bold };
+    const result = {
+      fillColor,
+      fontColor,
+      bold,
+      // 内置超级表的分隔线也属于样式；单元格自身边框仍会在合并阶段优先。
+      borders: palette.borders || null
+    };
     if (differentialStyle) {
-      // 表头/汇总行的 dxf 直接应用；数据区启用条纹时仅在条纹位置使用其
-      // 背景，避免 dataDxf 抹掉 Excel 表样式原有的隔行效果。
-      if (
-        differentialStyle.fillColor
-        && (isHeader || isTotal || stripeMatched || (!table.showRowStripes && !table.showColumnStripes))
-      ) {
+      // dxf 是表头、汇总行、整段数据或特定表列的显式差异格式，作用域已经
+      // 由 table/column 元数据确定；因此只覆盖其所属区域，不能扩散到整张表。
+      if (differentialStyle.fillColor) {
         result.fillColor = differentialStyle.fillColor;
       }
       if (differentialStyle.fontColor) result.fontColor = differentialStyle.fontColor;
@@ -1197,6 +1249,19 @@
           `${border.width}px ${border.style} ${border.color}`;
       }
     }
+  }
+
+  /**
+   * Excel 的工作表网格线不是单元格边框：
+   * - 单元格存在填充色时，Excel 不在填充区域上叠加默认网格线；
+   * - 单元格显式边框及超级表分隔线由 applyCellStyle 单独绘制；
+   * - 只有无填充单元格才根据 Sheet 的 showGridLines 决定是否显示网格。
+   *
+   * 使用 class 而不是直接写 border，可以让显式内联边框保持最高优先级。
+   */
+  function applyRawGridlineState(element, style, sheet) {
+    const hasFill = Boolean(style && (style.fillColor || style.fillPattern));
+    element.classList.toggle("has-sheet-gridline", sheet.showGridLines !== false && !hasFill);
   }
 
   function buildCell(text, raw, style, options) {
@@ -1376,6 +1441,12 @@
         rowHeights,
         colWidths: normalizeColumnWidths(widths, maxCols),
         merges: mergeRanges,
+        // ExcelJS 将 <sheetView showGridLines="0"> 暴露在 worksheet.views 中。
+        // 属性省略是 OOXML 默认值 true；只在文件明确写入 false 时隐藏。
+        showGridLines: !(
+          Array.isArray(worksheet.views)
+          && worksheet.views.some((view) => view && view.showGridLines === false)
+        ),
         source: "exceljs",
         tableStyleCount: tableStyles.length
       }));
@@ -1469,6 +1540,9 @@
       rowHeights,
       colWidths: normalizeColumnWidths(widths, maxCols),
       merges,
+      // 旧版 XLS 经 SheetJS 数据级解析时通常没有稳定的视图元数据，
+      // 按 Excel 默认行为显示网格线；显式单元格填充仍会遮蔽网格。
+      showGridLines: true,
       source: "sheetjs"
     });
   }
@@ -1620,6 +1694,8 @@
       rowHeights: rows.map(() => DEFAULT_RAW_ROW_HEIGHT),
       colWidths: inferCsvColumnWidths(rows, maxCols),
       merges: [],
+      // CSV 不包含工作表视图信息，使用电子表格的默认网格线展示。
+      showGridLines: true,
       source: "csv"
     });
     const delimiterNames = { ",": "逗号", "\t": "制表符", ";": "分号", "|": "竖线" };
@@ -1659,6 +1735,7 @@
     sheet.mergeLookup = null;
     sheet.hasVerticalMerges = sheet.merges.some((range) => range.endRow > range.startRow);
     sheet.nonHiddenRowCount = sheet.rows.filter((row) => !row.hidden).length;
+    sheet.showGridLines = sheet.showGridLines !== false;
     return sheet;
   }
 
@@ -1694,6 +1771,8 @@
     state.rawMatchLookup = new Map();
     state.rawMatchIndex = -1;
     state.sort = { column: -1, direction: null };
+    state.pinnedRows.clear();
+    state.pinnedColumns.clear();
     state.renderer = null;
     dom.search.value = "";
     updateRawSearchControls();
@@ -1772,6 +1851,8 @@
     state.rawMatchIndex = -1;
     state.sort = { column: -1, direction: null };
     state.rawFitEnabled = false;
+    state.pinnedRows.clear();
+    state.pinnedColumns.clear();
     state.renderer = null;
     dom.viewport.classList.remove("is-raw-fit");
 
@@ -1912,8 +1993,96 @@
     return originalWidths.map((width) => Math.max(1, Math.round(width * scale * 100) / 100));
   }
 
+  /** 返回当前工作表中仍可见、且已被用户固定的行号，按原始顺序排列。 */
+  function visiblePinnedRows(sheet) {
+    return Array.from(state.pinnedRows)
+      .filter((rowIndex) => sheet.rows[rowIndex] && !sheet.rows[rowIndex].hidden)
+      .sort((left, right) => left - right);
+  }
+
+  /** 返回当前工作表中仍可见、且已被用户固定的列号，按原始顺序排列。 */
+  function visiblePinnedColumns(sheet) {
+    return Array.from(state.pinnedColumns)
+      .filter((columnIndex) => sheet.colWidths[columnIndex] && !sheet.colWidths[columnIndex].hidden)
+      .sort((left, right) => left - right);
+  }
+
+  /** 多个固定行从表头下方依次堆叠，偏移量使用 Excel 原始行高。 */
+  function pinnedRowTop(sheet, rowIndex) {
+    return RAW_HEADER_HEIGHT + visiblePinnedRows(sheet)
+      .filter((candidate) => candidate < rowIndex)
+      .reduce((sum, candidate) => sum + (sheet.rowHeights[candidate] || DEFAULT_RAW_ROW_HEIGHT), 0);
+  }
+
+  /** 多个固定列从行号列右侧依次堆叠，自适应开启时使用缩放后的实时列宽。 */
+  function pinnedColumnLeft(sheet, columnIndex) {
+    const visibleColumns = visibleColumnIndices(sheet);
+    const displayWidths = rawDisplayWidths(sheet, visibleColumns);
+    const widthByColumn = new Map(
+      visibleColumns.map((candidate, index) => [candidate, displayWidths[index]])
+    );
+    return ROW_NUMBER_WIDTH + visiblePinnedColumns(sheet)
+      .filter((candidate) => candidate < columnIndex)
+      .reduce((sum, candidate) => sum + (widthByColumn.get(candidate) || 0), 0);
+  }
+
+  /** 给行号或列号添加可点击、可键盘操作的固定控制语义。 */
+  function prepareAxisPinControl(element, axis, index) {
+    const pinned = axis === "row" ? state.pinnedRows.has(index) : state.pinnedColumns.has(index);
+    const label = axis === "row" ? `第 ${index + 1} 行` : `${columnLetter(index)} 列`;
+    element.dataset.pinAxis = axis;
+    element.dataset.pinIndex = String(index);
+    element.setAttribute("role", "button");
+    element.setAttribute("tabindex", "0");
+    element.setAttribute("aria-pressed", String(pinned));
+    element.setAttribute("aria-label", `${pinned ? "取消固定" : "固定"}${label}`);
+    element.title = `${pinned ? "取消固定" : "固定"}${label}（可同时固定多行或多列）`;
+    element.classList.toggle("is-pinned-axis", pinned);
+  }
+
+  /**
+   * 将单元格放到对应的粘性行/列位置。固定行覆盖普通内容，固定列覆盖普通列；
+   * 二者交叉处使用更高层级，避免横纵滚动时被邻近单元格遮挡。
+   */
+  function applyPinnedCellPosition(element, sheet, rowIndex, columnIndex, pinnedOverlay) {
+    const pinnedRow = Number.isInteger(rowIndex) && state.pinnedRows.has(rowIndex);
+    const pinnedColumn = Number.isInteger(columnIndex) && state.pinnedColumns.has(columnIndex);
+    if (!pinnedRow && !pinnedColumn) return;
+
+    if (pinnedRow) {
+      element.classList.add("is-pinned-row-cell");
+      // 虚拟大表的固定行由独立粘性层定位，层内单元格无需再次设置 top。
+      if (!pinnedOverlay) element.style.top = `${pinnedRowTop(sheet, rowIndex)}px`;
+    }
+    if (pinnedColumn) {
+      element.classList.add("is-pinned-column-cell");
+      element.style.left = `${pinnedColumnLeft(sheet, columnIndex)}px`;
+    }
+    element.style.zIndex = pinnedRow && pinnedColumn ? "16" : pinnedRow ? "13" : "11";
+  }
+
+  /** 点击轴标记后重新渲染，并恢复操作前的滚动位置。 */
+  function toggleRawAxisPin(axis, index) {
+    if (!state.workbook || state.view !== "raw" || !Number.isInteger(index) || index < 0) return;
+    const collection = axis === "row" ? state.pinnedRows : state.pinnedColumns;
+    if (collection.has(index)) collection.delete(index);
+    else collection.add(index);
+
+    const scrollTop = dom.viewport.scrollTop;
+    const scrollLeft = dom.viewport.scrollLeft;
+    renderCurrentSheet();
+    dom.viewport.scrollTop = scrollTop;
+    dom.viewport.scrollLeft = scrollLeft;
+    requestAnimationFrame(() => {
+      dom.viewport.scrollTop = scrollTop;
+      dom.viewport.scrollLeft = scrollLeft;
+    });
+  }
+
   function gridTemplate(sheet, columns, useRawFit) {
-    const widths = useRawFit ? rawDisplayWidths(sheet, columns) : columns.map((index) => sheet.colWidths[index].width);
+    const widths = useRawFit
+      ? rawDisplayWidths(sheet, columns)
+      : columns.map((index) => sheet.colWidths[index].dataWidth || sheet.colWidths[index].width);
     return [
       `${ROW_NUMBER_WIDTH}px`,
       ...widths.map((width) => `${width}px`)
@@ -2094,6 +2263,9 @@
       const header = document.createElement("th");
       header.textContent = columnLetter(columnIndex);
       if (sheet.colWidths[columnIndex].hidden) header.style.display = "none";
+      prepareAxisPinControl(header, "column", columnIndex);
+      applyPinnedCellPosition(header, sheet, null, columnIndex, false);
+      if (state.pinnedColumns.has(columnIndex)) header.style.zIndex = "25";
       headerRow.appendChild(header);
     }
     thead.appendChild(headerRow);
@@ -2108,6 +2280,9 @@
       const rowHeader = document.createElement("th");
       rowHeader.scope = "row";
       rowHeader.textContent = String(row.sourceIndex + 1);
+      prepareAxisPinControl(rowHeader, "row", row.sourceIndex);
+      applyPinnedCellPosition(rowHeader, sheet, row.sourceIndex, null, false);
+      if (state.pinnedRows.has(row.sourceIndex)) rowHeader.style.zIndex = "17";
       tr.appendChild(rowHeader);
 
       for (let columnIndex = 0; columnIndex < sheet.maxCols; columnIndex += 1) {
@@ -2117,7 +2292,9 @@
         const cell = row.cells[columnIndex];
         setCellContent(td, cell);
         applyCellStyle(td, cell && cell.style, { omitSharedLeadingBorders: true });
+        applyRawGridlineState(td, cell && cell.style, sheet);
         prepareInteractiveCell(td, cell, row.sourceIndex, columnIndex, true);
+        applyPinnedCellPosition(td, sheet, row.sourceIndex, columnIndex, false);
         if (sheet.colWidths[columnIndex].hidden) td.style.display = "none";
         if (merge) {
           td.rowSpan = merge.range.endRow - merge.range.startRow + 1;
@@ -2139,7 +2316,11 @@
     cornerHeader.replaceChildren(createRawFitToggle());
     dom.header.appendChild(cornerHeader);
     for (const columnIndex of columns) {
-      dom.header.appendChild(createHeaderCell(columnLetter(columnIndex), columnIndex, false, false));
+      const header = createHeaderCell(columnLetter(columnIndex), columnIndex, false, false);
+      prepareAxisPinControl(header, "column", columnIndex);
+      applyPinnedCellPosition(header, sheet, null, columnIndex, false);
+      if (state.pinnedColumns.has(columnIndex)) header.style.zIndex = "25";
+      dom.header.appendChild(header);
     }
   }
 
@@ -2279,7 +2460,9 @@
   }
 
   function templateWidth(sheet, columns, useRawFit) {
-    const widths = useRawFit ? rawDisplayWidths(sheet, columns) : columns.map((index) => sheet.colWidths[index].width);
+    const widths = useRawFit
+      ? rawDisplayWidths(sheet, columns)
+      : columns.map((index) => sheet.colWidths[index].dataWidth || sheet.colWidths[index].width);
     return ROW_NUMBER_WIDTH + widths.reduce((sum, width) => sum + width, 0);
   }
 
@@ -2319,6 +2502,39 @@
   }
 
   /**
+   * 虚拟滚动只保留视口附近的普通行；固定行可能早已离开渲染窗口，因此单独
+   * 建立始终存在的粘性层。各行仍复用 createGridRow，样式、合并降级、搜索
+   * 和复制行为与普通虚拟行完全一致。
+   */
+  function createPinnedRowsOverlay(renderer) {
+    if (renderer.kind !== "raw" || !state.pinnedRows.size) return null;
+    const entries = renderer.rows
+      .filter((entry) => state.pinnedRows.has(entry.sourceIndex))
+      .sort((left, right) => left.sourceIndex - right.sourceIndex);
+    if (!entries.length) return null;
+
+    const overlay = document.createElement("div");
+    overlay.className = "raw-pinned-rows";
+    overlay.style.width = `${templateWidth(renderer.sheet, renderer.columns, true)}px`;
+    for (const entry of entries) {
+      const row = createGridRow({
+        kind: "raw",
+        sheet: renderer.sheet,
+        columns: renderer.columns,
+        entry,
+        template: renderer.template,
+        virtual: false,
+        pinnedOverlay: true,
+        top: 0,
+        height: renderer.sheet.rowHeights[entry.sourceIndex] || DEFAULT_RAW_ROW_HEIGHT
+      });
+      row.classList.add("is-pinned-overlay-row");
+      overlay.appendChild(row);
+    }
+    return overlay;
+  }
+
+  /**
    * 只创建视口附近的行。滚动事件会被 requestAnimationFrame 合并，
    * 同一帧内无论触发多少次 scroll，都只进行一次范围计算和 DOM 替换。
    */
@@ -2337,7 +2553,11 @@
     renderer.lastRange = rangeKey;
 
     const fragment = document.createDocumentFragment();
+    const pinnedOverlay = createPinnedRowsOverlay(renderer);
+    if (pinnedOverlay) fragment.appendChild(pinnedOverlay);
     for (let index = start; index <= end; index += 1) {
+      // 固定行由上方独立层显示；原位置保留在总高度中，但不重复创建同一行。
+      if (renderer.kind === "raw" && state.pinnedRows.has(renderer.rows[index].sourceIndex)) continue;
       fragment.appendChild(createGridRow({
         kind: renderer.kind,
         sheet: renderer.sheet,
@@ -2354,7 +2574,7 @@
 
   function createGridRow(options) {
     const rowElement = document.createElement("div");
-    rowElement.className = `grid-row${options.virtual ? " is-virtual" : ""}`;
+    rowElement.className = `grid-row${options.virtual ? " is-virtual" : ""}${options.kind === "raw" ? " is-raw-row" : ""}`;
     rowElement.style.gridTemplateColumns = options.template;
     rowElement.style.height = `${options.height}px`;
     if (options.virtual) rowElement.style.transform = `translateY(${options.top}px)`;
@@ -2362,6 +2582,17 @@
     const rowNumber = document.createElement("div");
     rowNumber.className = "grid-cell is-row-number";
     rowNumber.textContent = String(options.entry.sourceIndex + 1);
+    if (options.kind === "raw") {
+      prepareAxisPinControl(rowNumber, "row", options.entry.sourceIndex);
+      applyPinnedCellPosition(
+        rowNumber,
+        options.sheet,
+        options.entry.sourceIndex,
+        null,
+        Boolean(options.pinnedOverlay)
+      );
+      if (state.pinnedRows.has(options.entry.sourceIndex)) rowNumber.style.zIndex = "17";
+    }
     rowElement.appendChild(rowNumber);
 
     if (options.kind === "raw") appendRawCells(rowElement, options);
@@ -2397,7 +2628,15 @@
       if (merge && merge.range.endRow > merge.range.startRow && !merge.master) cell = null;
       setCellContent(cellElement, cell);
       applyCellStyle(cellElement, cell && cell.style, { omitSharedLeadingBorders: true });
+      applyRawGridlineState(cellElement, cell && cell.style, options.sheet);
       prepareInteractiveCell(cellElement, cell, rowIndex, columnIndex, true);
+      applyPinnedCellPosition(
+        cellElement,
+        options.sheet,
+        rowIndex,
+        columnIndex,
+        Boolean(options.pinnedOverlay)
+      );
 
       if (merge && merge.master && merge.range.endRow === merge.range.startRow) {
         const visibleSpan = options.columns.filter(
@@ -2502,6 +2741,15 @@
       virtual ? "已启用虚拟滚动" : "完整渲染"
     ];
     if (state.rawFitEnabled) parts.push("已按比例适应宽度");
+    if (!sheet.showGridLines) parts.push("已按文件隐藏网格线");
+    const pinnedRowCount = visiblePinnedRows(sheet).length;
+    const pinnedColumnCount = visiblePinnedColumns(sheet).length;
+    if (pinnedRowCount || pinnedColumnCount) {
+      const pinnedParts = [];
+      if (pinnedRowCount) pinnedParts.push(`${pinnedRowCount} 行`);
+      if (pinnedColumnCount) pinnedParts.push(`${pinnedColumnCount} 列`);
+      parts.push(`已固定 ${pinnedParts.join("、")}`);
+    }
     if (state.searchText.trim()) {
       const total = state.rawMatches.length;
       const current = total && state.rawMatchIndex >= 0 ? state.rawMatchIndex + 1 : 0;
@@ -2879,12 +3127,27 @@
   dom.searchPrev.addEventListener("click", () => stepRawMatch(-1));
   dom.searchNext.addEventListener("click", () => stepRawMatch(1));
 
-  // 使用事件委托，虚拟滚动中新创建的单元格不需要逐个重新绑定复制事件。
+  // 使用事件委托，虚拟滚动中新创建的行列标记和数据单元格无需逐个绑定事件。
   dom.viewport.addEventListener("click", (event) => {
+    const pinTarget = event.target.closest("[data-pin-axis][data-pin-index]");
+    if (pinTarget && dom.viewport.contains(pinTarget)) {
+      event.preventDefault();
+      toggleRawAxisPin(pinTarget.dataset.pinAxis, Number(pinTarget.dataset.pinIndex));
+      return;
+    }
     if (!state.copyEnabled) return;
     const cell = event.target.closest(".grid-cell:not(.is-row-number), .raw-table td");
     if (!cell || !dom.viewport.contains(cell)) return;
     copyRenderedCell(cell);
+  });
+
+  /** 非原生 button 的 th/div 轴标记支持 Enter 和空格键切换固定状态。 */
+  dom.viewport.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const pinTarget = event.target.closest("[data-pin-axis][data-pin-index]");
+    if (!pinTarget || !dom.viewport.contains(pinTarget)) return;
+    event.preventDefault();
+    toggleRawAxisPin(pinTarget.dataset.pinAxis, Number(pinTarget.dataset.pinIndex));
   });
 
   dom.viewport.addEventListener("scroll", () => {
