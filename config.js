@@ -36,6 +36,13 @@ window.EXCEL_VIEWER_CONFIG = {
     url: "/excel/edge_key.xlsx",
     type: "xlsx",
     autoFit: false
+  }, {
+    id: "local_id_3",
+    name: "超级表测试",
+    url: "/excel/超级表测试.xlsx",
+    type: "xlsx",
+    action: "open",
+    autoFit: false
   }],
 
   /** 页面打开后自动加载的预置文件 id；null 表示不自动加载。 */

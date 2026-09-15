@@ -6,17 +6,22 @@
   <meta name="color-scheme" content="light">
   <title>轻表格 · Excel / CSV 查看器</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
+  <!-- 样式按职责拆分并按依赖顺序加载；仍是浏览器直接读取，不需要构建。 -->
+  <link rel="stylesheet" href="./src/css/base.css">
+  <link rel="stylesheet" href="./src/css/source-panel.css">
+  <link rel="stylesheet" href="./src/css/viewer-toolbar.css">
+  <link rel="stylesheet" href="./src/css/grid.css">
+  <link rel="stylesheet" href="./src/css/responsive.css">
   <script>
     /*
-     * 首帧先显示启动动画。app.js 读取 config.js 后才能知道是否需要默认打开文件，
+     * 首帧先显示启动动画。ES Module 入口读取 config.js 后才能知道是否需要默认打开文件，
      * 因此不能只依赖地址栏参数判断，否则会先闪现文件选择界面。
      */
     document.documentElement.classList.add("is-startup-loading");
   </script>
 </head>
 <body>
-  <!-- 查询参数启动遮罩覆盖整个页面，清单或工作簿处理完成后由 app.js 移除。 -->
+  <!-- 查询参数启动遮罩覆盖整个页面，清单或工作簿处理完成后由主模块移除。 -->
   <div class="startup-loader" id="startup-loader" role="status" aria-live="polite" aria-label="正在初始化查看器">
     <div class="startup-loader-visual" aria-hidden="true">
       <span class="startup-orbit startup-orbit-one"></span>
@@ -192,6 +197,7 @@
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-  <script src="app.js"></script>
+  <!-- 原生 ES Modules 必须通过 HTTP(S) 访问，项目不再支持 file:// 双击运行。 -->
+  <script type="module" src="./src/js/main.js"></script>
 </body>
 </html>

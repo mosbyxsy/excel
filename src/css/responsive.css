@@ -1,0 +1,544 @@
+/* ========================================================================== */
+/* 7. 页脚与响应式适配                                                         */
+/* ========================================================================== */
+
+footer {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .source-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    overflow-x: auto;
+  }
+
+  .panel-heading {
+    display: none;
+  }
+
+  .source-grid {
+    min-width: 760px;
+    grid-template-columns: 230px 1fr;
+  }
+
+  .file-summary strong {
+    max-width: 32vw;
+  }
+
+  .toolbar-actions {
+    min-width: 0;
+  }
+
+  .search-box {
+    min-width: 160px;
+    flex: 1;
+  }
+
+}
+
+@media (max-width: 620px) {
+  .privacy-note {
+    display: none;
+  }
+
+  .source-panel {
+    min-height: 48px;
+    padding: 5px 8px;
+    flex-basis: 48px;
+  }
+
+  .drop-zone {
+    padding: 5px 7px;
+  }
+
+  .drop-zone .button {
+    width: auto;
+  }
+
+  .viewer-toolbar {
+    min-height: 82px;
+    padding: 6px 8px;
+    flex-basis: 82px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 8px;
+  }
+
+  .file-summary strong {
+    max-width: calc(100vw - 80px);
+  }
+
+  .toolbar-actions {
+    grid-column: 1 / -1;
+    align-items: stretch;
+    flex-direction: row;
+  }
+
+  .segmented button {
+    flex: 1;
+  }
+
+  .search-box {
+    min-width: 100px;
+    width: auto;
+    flex: 1;
+  }
+
+  .sheet-bar,
+  .status-line {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .loading-overlay {
+    inset: 82px 0 0;
+  }
+}
+
+/* ========================================================================== */
+/* 8. 居中文件空状态与单行查看器工具栏                                       */
+/* ========================================================================== */
+
+/*
+ * workspace 作为初始选择卡片的定位容器。
+ * 文件未打开时，下面的 viewer-card 只提供安静的满屏画布，不显示多余工具栏。
+ */
+.workspace {
+  position: relative;
+}
+
+.viewer-card.is-empty {
+  background:
+    linear-gradient(rgba(21, 122, 98, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(21, 122, 98, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 42%, #ffffff 0, #f6faf8 60%, #eef5f2 100%);
+  background-size: 32px 32px, 32px 32px, auto;
+}
+
+.viewer-card.is-empty .viewer-toolbar,
+.viewer-card.is-empty .status-line,
+.viewer-card.is-empty .grid-empty {
+  display: none;
+}
+
+/*
+ * 初始选择区属于页面空状态，而不是模态弹窗：没有遮罩和关闭按钮。
+ * 使用绝对定位避免卡片占据表格布局高度；打开文件后直接通过 hidden 移除。
+ */
+.source-panel {
+  width: min(860px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  min-height: 0;
+  padding: 28px;
+  display: block;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 10;
+  transform: translate(-50%, -50%);
+  overflow: auto;
+  border: 1px solid rgba(190, 211, 203, 0.95);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 24px 70px rgba(20, 65, 53, 0.16);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.source-panel .panel-heading {
+  margin: 0 0 22px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.source-panel .eyebrow {
+  margin: 0 0 5px;
+  display: block;
+}
+
+.source-panel .panel-heading h1 {
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.source-panel .panel-heading p:not(.eyebrow) {
+  margin: 7px 0 0;
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.source-panel .format-badge {
+  margin-top: 2px;
+  padding: 7px 10px;
+  display: inline-flex;
+}
+
+/* 加载或校验失败后就地显示原因，让用户可以马上修正输入并重试。 */
+.source-message {
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid #efc7c3;
+  border-radius: 10px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.source-panel .source-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(340px, 1.1fr);
+  gap: 18px;
+}
+
+.source-panel .drop-zone {
+  min-height: 170px;
+  height: auto;
+  padding: 24px;
+  gap: 16px;
+  border: 1.5px dashed #9ec4b6;
+  border-radius: 12px;
+}
+
+.source-panel .upload-icon {
+  width: 46px;
+  height: 46px;
+  border: 1px solid #cae4db;
+  background: #fff;
+  font-size: 24px;
+}
+
+.source-panel .drop-copy strong {
+  font-size: 15px;
+}
+
+.source-panel .drop-copy small {
+  margin-top: 5px;
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.source-panel .remote-source {
+  min-height: 170px;
+  padding: 18px;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.source-panel .remote-source > label,
+.source-panel .remote-source > .field-label {
+  margin-bottom: 6px;
+  display: block;
+  color: #486059;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.source-panel .divider {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #9aa9a4;
+  font-size: 10px;
+}
+
+.source-panel .button,
+.source-panel .input-row input,
+.source-panel .input-row select,
+.source-panel .preset-trigger {
+  min-height: 38px;
+  height: 38px;
+}
+
+/*
+ * 宽屏第一行只保留文件信息和常用操作；工作表标签下移到第二行状态栏。
+ * 这样 Sheet 数量变化不会挤压视图切换与搜索框，整体结构也更接近表格软件。
+ */
+.viewer-toolbar {
+  width: 100%;
+  min-height: 52px;
+  padding: 5px 12px;
+  flex: 0 0 52px;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.viewer-toolbar .file-summary > div {
+  min-width: 0;
+}
+
+.viewer-toolbar .file-summary strong {
+  max-width: min(48vw, 520px);
+}
+
+/* 状态栏左侧承载 Sheet，右侧显示当前渲染状态。 */
+.status-line .sheet-bar {
+  min-width: 0;
+  min-height: 0;
+  height: 35px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+}
+
+.status-line .sheet-label {
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.status-line .sheet-tabs {
+  height: 100%;
+  align-items: stretch;
+}
+
+.status-line .sheet-tab {
+  height: 35px;
+}
+
+.status-line .status-feedback {
+  max-width: min(52vw, 680px);
+}
+
+.viewer-toolbar .toolbar-actions {
+  min-width: 0;
+  gap: 8px;
+}
+
+.loading-overlay {
+  inset: 52px 0 0;
+}
+
+/* 中等宽度仍采用单行，只适度压缩文件信息和搜索框。 */
+@media (max-width: 1100px) {
+  .viewer-toolbar {
+    grid-template-columns: minmax(150px, 1fr) max-content;
+    gap: 8px;
+  }
+
+  .viewer-toolbar .file-summary strong {
+    max-width: 34vw;
+  }
+
+  .viewer-toolbar .search-box {
+    width: 240px;
+    min-width: 180px;
+  }
+
+  .status-line {
+    gap: 8px;
+  }
+
+  .status-line .status-feedback {
+    max-width: 48vw;
+  }
+}
+
+@media (max-width: 820px) {
+  .source-panel {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    padding: 18px;
+  }
+
+  .source-panel .panel-heading {
+    margin-bottom: 14px;
+  }
+
+  .source-panel .format-badge {
+    display: none;
+  }
+
+  .source-panel .source-grid {
+    min-width: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .source-panel .drop-zone {
+    min-height: 104px;
+    padding: 16px;
+  }
+
+  .source-panel .remote-source {
+    min-height: 0;
+  }
+
+  /*
+   * 手机端第一行只放文件信息和“更换文件”；复制、视图切换、搜索位于第二行。
+   * 四列中的第三列负责吸收剩余宽度，使超长文件名能够稳定显示省略号。
+   * toolbar-actions 使用 display: contents，让四个子控件能直接参与父级网格布局。
+   */
+  .viewer-toolbar {
+    min-height: 80px;
+    padding: 4px 8px;
+    flex-basis: 80px;
+    display: grid;
+    grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
+    grid-template-rows: 34px 34px;
+    align-items: center;
+    gap: 4px 8px;
+    overflow: hidden;
+  }
+
+  .viewer-toolbar .file-summary {
+    min-width: 0;
+    gap: 8px;
+    grid-column: 1 / 4;
+    grid-row: 1;
+  }
+
+  .viewer-toolbar .file-summary strong {
+    max-width: 100%;
+    font-size: 12px;
+  }
+
+  .viewer-toolbar .file-summary span:not(.file-icon) {
+    display: none;
+  }
+
+  .viewer-toolbar .toolbar-actions {
+    display: contents;
+  }
+
+  .viewer-toolbar .copy-toggle {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .viewer-toolbar .source-toggle {
+    grid-column: 4;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .viewer-toolbar .segmented {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .viewer-toolbar .search-box {
+    width: 100%;
+    min-width: 0;
+    grid-column: 3 / 5;
+    grid-row: 2;
+  }
+
+  /* Sheet 保持在左侧，右侧状态信息单行省略，二者都不会撑宽页面。 */
+  .status-line {
+    min-height: 36px;
+    padding: 0 8px;
+    flex-basis: 36px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 52%);
+    gap: 8px;
+  }
+
+  .status-line .sheet-label {
+    display: none;
+  }
+
+  .status-line .sheet-tabs {
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .status-line .sheet-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .status-line .sheet-tab {
+    padding: 0 10px;
+  }
+
+  .status-line .status-feedback {
+    width: 100%;
+    max-width: none;
+  }
+
+  .loading-overlay {
+    inset: 80px 0 0;
+  }
+}
+
+@media (max-width: 430px) {
+  .source-panel {
+    padding: 15px;
+    border-radius: 16px;
+  }
+
+  .source-panel .panel-heading h1 {
+    font-size: 22px;
+  }
+
+  .source-panel .panel-heading p:not(.eyebrow) {
+    font-size: 12px;
+  }
+
+  .source-panel .source-grid {
+    gap: 12px;
+  }
+
+  .source-panel .drop-zone {
+    min-height: 96px;
+    padding: 12px;
+  }
+
+  .viewer-toolbar {
+    grid-template-columns: max-content max-content minmax(0, 1fr) max-content;
+  }
+
+  .viewer-toolbar .file-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .viewer-toolbar .source-toggle {
+    padding: 0 8px;
+  }
+
+  .viewer-toolbar .copy-toggle {
+    padding: 0 8px;
+  }
+
+  .viewer-toolbar .segmented button {
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
+  .viewer-toolbar .search-box {
+    padding: 0 8px;
+  }
+
+  .viewer-toolbar .search-box > span[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,6 +1,6 @@
 # 轻表格 · Excel / CSV 查看器
 
-一个不需要 npm、打包器或构建脚本的纯静态工作表查看站点。浏览器直接读取并展示文件，不提供编辑、保存和上传到业务服务器的功能。
+一个不需要 npm、打包器或构建脚本的纯静态工作表查看站点。业务代码使用浏览器原生 ES Modules 组织，浏览器直接读取并展示文件，不提供编辑、保存和上传到业务服务器的功能。
 
 页面采用表格优先的满屏布局：尚未打开文件时，文件选择操作在页面中央显示；加载成功后选择区完全隐藏。第一行显示文件信息、视图切换与搜索，第二行左侧显示 Sheet 标签、右侧显示当前渲染状态，其余空间全部交给工作表。点击“更换文件”会结束当前查看并回到初始选择状态，不使用弹窗或遮罩。
 
@@ -26,7 +26,7 @@
 
 ## 运行方式
 
-项目没有构建步骤。将整个目录放到任意静态 HTTP 服务器即可。
+项目没有构建步骤。将整个目录放到任意静态 HTTP(S) 服务器即可。服务器应以 JavaScript MIME 类型（通常为 `text/javascript`）返回 `.js` 模块文件。
 
 例如已有 Python 环境时，可以在项目目录执行：
 
@@ -36,7 +36,7 @@ python -m http.server 8080
 
 然后访问 `http://localhost:8080/`。
 
-不建议直接双击 `index.html`。浏览器的 `file://` 安全策略可能阻止 CDN 脚本或远程文件请求。
+项目使用原生 ES Modules，**不支持直接双击 `index.html` 或通过 `file://` 运行**。请始终使用 HTTP(S) 地址访问；否则浏览器会因模块同源策略阻止源码加载。
 
 ## 通过页面地址直接打开文件
 
@@ -159,7 +159,11 @@ Access-Control-Allow-Origin: https://viewer.example.com
 
 原始视图不会把统一 CSS 边框强制画到所有单元格上。单元格存在 Excel 填充色时，默认工作表网格线不会覆盖该区域；单元格自身边框和超级表样式中的分隔线仍按原样显示。工作簿明确关闭 `showGridLines` 后，无填充区域也不会显示默认网格线。CSV 和无法可靠读取视图设置的旧版 XLS 使用 Excel 默认的开启网格线行为。
 
-`.xlsx`/`.xlsm` 中的 Excel 超级表会读取表区域、内置 `TableStyleLight`、`TableStyleMedium`、`TableStyleDark` 样式名、表头/汇总行、隔行/隔列以及首末列开关。查看器还会从 OOXML 的 `styles.xml` 和 `table*.xml` 补读 `dataDxfId`，并严格按表头、数据区、汇总行或指定表列的作用范围应用，避免某一列的差异格式覆盖整张表。`TableStyleMedium14` 会使用工作簿的强调色 6，并保留 Excel 的主题色、浅色 60% 和浅色 80% 三个层级。单元格手工设置的格式优先于超级表格式。
+`.xlsx`/`.xlsm` 中的 Excel 超级表会读取表区域、内置 `TableStyleLight`、`TableStyleMedium`、`TableStyleDark` 样式名、表头/汇总行、隔行/隔列以及首末列开关。查看器内置了 Excel 的 60 项样式规则（Light 1~21、Medium 1~28、Dark 1~11），分别描述表头、表体、两组行条纹、两组列条纹、汇总行、字体和边框；颜色从当前工作簿的 `theme1.xml` 取值，并按 Excel 的 240 阶整数 HLS tint 规则动态生成，并非给所有文件套固定颜色。默认 Office 主题下，`TableStyleMedium14` 的强调色 6、浅色 60% 和浅色 80% 会分别解析为 `#70AD47`、`#C6E0B4`、`#E2EFDA`。查看器还会从 OOXML 的 `styles.xml` 和 `table*.xml` 补读 `dataDxfId`，并严格按表头、数据区、汇总行或指定表列的作用范围应用，避免某一列的差异格式覆盖整张表。单元格手工设置的格式优先于超级表格式。
+
+`TableStyleLight8` 至 `TableStyleLight14` 使用实色表头、主题色外框和横向行边框，表体保持主题背景色。即使文件中的 `showRowStripes="1"` 已开启，这一组样式本身没有条纹填充，也不会额外生成隔行背景或内部竖向网格线。
+
+60 项内置样式按 Excel 图库的九个结构组分别处理：Light 1~7 使用主题色表头文字与上下边界，Light 8~14 使用实色表头、外框和行边框，Light 15~21 使用浅色条纹与完整单元格边框；Medium 四组分别还原外框行线、白色分隔线、黑色粗边界和浅色完整网格；Dark 1~7 使用黑色表头和深色条纹，Dark 8~11 使用 Excel 对应的复合色组合。Dark 1~11 的表体依靠深浅填充区分数据行，不绘制横向或纵向网格线；仅在表头底部和汇总行顶部保留必要边界。脚本启动时会对 60 个名称逐项检查字体色、表头/奇偶条纹/汇总行填充、行列分隔线、外框、首末列强调、条纹开关、行列条纹优先级、默认主题实测色和自定义主题响应，防止后续修改造成整组样式回退。
 
 ### 数据视图
 
@@ -185,14 +189,38 @@ Access-Control-Allow-Origin: https://viewer.example.com
 - ExcelJS/SheetJS 无法完全复刻 Excel 桌面端的条件格式计算结果和复杂数字格式。
 - `.xls` 使用兼容解析器，格式还原程度低于 `.xlsx` 和 `.xlsm`。
 
-## 文件结构
+## 源码目录与模块职责
 
 ```text
 .
-├── index.html   # 页面结构与固定版本 ExcelJS、SheetJS、JSZip CDN 引用
-├── styles.css   # 页面视觉、表格和虚拟滚动样式
-├── config.js    # 部署时可修改的在线文件配置
-├── favicon.svg  # 页面 Logo 与浏览器标签页图标
-├── app.js       # 文件解析、状态管理和渲染逻辑
-└── README.md    # 使用、部署和限制说明
+├── index.html                         # 页面结构、第三方 CDN 与 ES Module 入口
+├── config.js                          # 部署时可直接修改的在线文件配置
+├── config.json                        # `?config=` 远程清单的示例数据
+├── favicon.svg                        # 页面 Logo 与浏览器标签页图标
+├── src/
+│   ├── css/
+│   │   ├── base.css                   # 设计变量、重置、基础布局和启动动画
+│   │   ├── source-panel.css           # 未打开文件时的文件选择区域
+│   │   ├── viewer-toolbar.css         # 文件信息、操作栏、Sheet 栏和状态提示
+│   │   ├── grid.css                   # 表格、单元格、固定行列和虚拟滚动
+│   │   └── responsive.css             # 页脚、PC 紧凑布局与移动端适配
+│   └── js/
+│       ├── core.js                    # 配置、DOM、共享状态、颜色和通用工具
+│       ├── main.js                    # 文件加载、远程清单、事件绑定和初始化入口
+│       ├── parsers/
+│       │   └── workbook-parser.js     # ExcelJS、SheetJS、CSV 与统一数据模型
+│       ├── table-styles/
+│       │   └── table-styles.js        # OOXML 表样式及 60 种内置超级表规则
+│       └── viewer/
+│           └── viewer.js              # 双视图、搜索、排序、固定行列和虚拟滚动
+├── excel/                              # 示例工作簿；可按部署需要增删
+├── CNAME                               # 静态托管所使用的自定义域名
+├── LICENSE                             # 项目许可证
+└── README.md                            # 使用、架构、部署和限制说明
 ```
+
+JavaScript 的依赖方向保持单向：`main.js` 组合解析器和渲染器；解析器依赖核心工具与超级表规则；渲染器依赖核心状态与样式应用；超级表规则只依赖核心颜色和格式工具。工作簿状态切换与视图渲染放在同一 `viewer.js` 中，是为了避免两者互相导入形成循环依赖。
+
+`config.js` 刻意保留为普通脚本并暴露 `window.EXCEL_VIEWER_CONFIG`，便于部署人员不修改源码模块就能调整文件清单。ExcelJS、SheetJS 和 JSZip 也继续使用固定版本的浏览器 CDN 包，由 `index.html` 在主模块之前加载。
+
+CSS 按上方顺序在 `index.html` 中直接引用；后加载的响应式样式可以覆盖基础规则。增删或调整这些 `<link>` 时应保持该顺序。所有源码均由浏览器直接加载，不需要 `package.json`、npm 或任何构建命令。

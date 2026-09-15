@@ -1,0 +1,447 @@
+/* ========================================================================== */
+/* 2. 顶部品牌栏                                                               */
+/* ========================================================================== */
+
+.topbar {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(202, 216, 211, 0.8);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(14px);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  display: block;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  background: url("favicon.svg") center / contain no-repeat;
+  box-shadow: 0 7px 18px rgba(21, 122, 98, 0.24);
+}
+
+.brand-mark span {
+  display: none;
+}
+
+.brand strong,
+.brand small {
+  display: block;
+}
+
+.brand strong {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.brand small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.privacy-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.privacy-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3eb38d;
+  box-shadow: 0 0 0 4px rgba(62, 179, 141, 0.12);
+}
+
+/* ========================================================================== */
+/* 3. 文件来源面板                                                             */
+/* ========================================================================== */
+
+.workspace {
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.source-panel,
+.viewer-card {
+  border: 0;
+  background: var(--paper);
+  box-shadow: none;
+}
+
+/*
+ * 文件来源从大卡片压缩为一条应用工具栏。
+ * 它只占固定高度，把绝大部分视口留给下方表格。
+ */
+.source-panel {
+  min-height: 50px;
+  padding: 5px 12px;
+  flex: 0 0 50px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  opacity: 1;
+  transition: min-height 160ms ease, flex-basis 160ms ease, padding 160ms ease, opacity 120ms ease;
+}
+
+.panel-heading {
+  display: block;
+  margin: 0;
+}
+
+.eyebrow {
+  display: none;
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.panel-heading h1 {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.panel-heading p:not(.eyebrow) {
+  display: none;
+}
+
+.format-badge {
+  display: none;
+}
+
+.source-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(225px, 0.48fr) minmax(500px, 1.52fr);
+  gap: 8px;
+}
+
+.drop-zone {
+  min-height: 38px;
+  height: 38px;
+  padding: 5px 7px 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px dashed #9ec4b6;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #f4fbf8, #fbfdfc);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.drop-zone:hover,
+.drop-zone.is-dragging {
+  border-color: var(--brand);
+  background: #edf9f5;
+  transform: translateY(-1px);
+}
+
+.drop-zone input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.upload-icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 50%;
+  color: var(--brand);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.drop-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.drop-copy strong,
+.drop-copy small {
+  display: block;
+}
+
+.drop-copy strong {
+  font-size: 12px;
+}
+
+.drop-copy small {
+  display: none;
+}
+
+.remote-source {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(300px, 1.3fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+}
+
+.remote-source > label,
+.remote-source > .field-label {
+  display: none;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.input-row input,
+.input-row select {
+  min-width: 0;
+  height: 38px;
+  flex: 1;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: none;
+  color: var(--ink);
+  background: #fff;
+}
+
+/* 自定义预置文件下拉：弹层完全由站点绘制，不再调用系统原生 select 菜单。 */
+.preset-select {
+  min-width: 0;
+  flex: 1;
+  position: relative;
+}
+
+.preset-trigger {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: none;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.preset-trigger:hover:not(:disabled) {
+  border-color: #9ebdb2;
+  background: #fbfdfc;
+}
+
+.preset-trigger:focus-visible,
+.preset-select.is-open .preset-trigger {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(21, 122, 98, 0.1);
+}
+
+.preset-trigger:disabled {
+  cursor: not-allowed;
+  color: #93a19d;
+  background: #f6f8f7;
+}
+
+.preset-value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-chevron {
+  width: 8px;
+  height: 8px;
+  margin: -4px 3px 0 0;
+  flex: 0 0 auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 150ms ease, margin 150ms ease;
+}
+
+.preset-select.is-open .preset-chevron {
+  margin-top: 4px;
+  transform: rotate(225deg);
+}
+
+.preset-options {
+  width: 100%;
+  max-height: 220px;
+  padding: 5px;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 80;
+  overflow-y: auto;
+  border: 1px solid #c8d9d3;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 36px rgba(27, 61, 52, 0.18);
+  scrollbar-width: thin;
+  scrollbar-color: #b4c9c1 transparent;
+}
+
+.preset-option {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.preset-option::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border: 1px solid #a9c8bc;
+  border-radius: 50%;
+  content: "";
+}
+
+.preset-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-option:hover,
+.preset-option:focus-visible {
+  outline: none;
+  color: var(--brand-dark);
+  background: #eef8f4;
+}
+
+.preset-option[aria-selected="true"] {
+  color: var(--brand-dark);
+  background: var(--brand-soft);
+  font-weight: 750;
+}
+
+.preset-option[aria-selected="true"]::before {
+  border-color: var(--brand);
+  background: var(--brand);
+  box-shadow: 0 0 0 3px rgba(21, 122, 98, 0.12);
+}
+
+.input-row input {
+  padding: 0 12px;
+}
+
+.input-row select {
+  padding: 0 34px 0 11px;
+}
+
+.input-row input:focus,
+.input-row select:focus,
+.search-box:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(21, 122, 98, 0.1);
+}
+
+.divider {
+  display: none;
+}
+
+.divider::before,
+.divider::after {
+  height: 1px;
+  flex: 1;
+  content: "";
+  background: var(--line);
+}
+
+.button {
+  min-height: 36px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.button:active {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.button-primary {
+  color: #fff;
+  background: var(--brand);
+}
+
+.button-primary:hover {
+  background: var(--brand-dark);
+}
+
+.button-secondary {
+  min-width: 64px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: #f7faf9;
+}
+
+.button-secondary:hover {
+  border-color: #a8beb7;
+  background: #eef4f2;
+}
+

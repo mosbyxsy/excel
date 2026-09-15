@@ -1,0 +1,420 @@
+/* ========================================================================== */
+/* 4. 查看器工具栏与工作表标签                                                 */
+/* ========================================================================== */
+
+.viewer-card {
+  min-height: 0;
+  margin: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  border-radius: 0;
+}
+
+.viewer-toolbar {
+  min-height: 48px;
+  padding: 6px 12px;
+  flex: 0 0 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.file-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: url("../../favicon.svg") center / contain no-repeat;
+}
+
+.file-summary strong,
+.file-summary span:not(.file-icon) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-summary strong {
+  max-width: min(38vw, 540px);
+  font-size: 13px;
+}
+
+.file-summary span:not(.file-icon) {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.source-toggle {
+  height: 34px;
+  padding: 0 11px;
+  flex: 0 0 auto;
+  border: 1px solid #b9d4ca;
+  border-radius: 8px;
+  color: var(--brand-dark);
+  background: #f1f8f5;
+  font-size: 11px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.source-toggle:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+/* 点击复制默认保持低调，开启后使用品牌色明确表示当前处于可复制模式。 */
+.copy-toggle {
+  height: 34px;
+  padding: 0 11px;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: #536a63;
+  background: #fff;
+  font-size: 11px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.copy-toggle:hover {
+  border-color: #9db7ae;
+  background: #f5f9f7;
+}
+
+.copy-toggle.is-active {
+  border-color: var(--brand);
+  color: #fff;
+  background: var(--brand);
+  box-shadow: 0 4px 12px rgba(21, 122, 98, 0.2);
+}
+
+.segmented {
+  padding: 3px;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f4f7f6;
+}
+
+.segmented button {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.segmented button.is-active {
+  color: var(--brand-dark);
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(36, 71, 62, 0.1);
+  font-weight: 750;
+}
+
+.segmented button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.search-box {
+  width: 300px;
+  height: 34px;
+  padding: 0 6px 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: #78908a;
+  background: #fff;
+}
+
+.search-box input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12px;
+}
+
+.search-count {
+  min-width: 34px;
+  flex: 0 0 auto;
+  color: #60756e;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.search-nav {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  border: 0;
+  border-radius: 6px;
+  color: #49635b;
+  background: #edf4f1;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.search-nav:hover:not(:disabled) {
+  color: var(--brand-dark);
+  background: var(--brand-soft);
+}
+
+.search-nav:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.search-box:has(input:disabled) {
+  opacity: 0.55;
+  background: #f5f7f6;
+}
+
+.sheet-bar {
+  min-height: 36px;
+  padding: 3px 12px 0;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfc;
+}
+
+.sheet-label {
+  padding-bottom: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sheet-tabs {
+  min-width: 0;
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sheet-tab {
+  height: 33px;
+  padding: 0 12px;
+  flex: 0 0 auto;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sheet-tab:hover {
+  color: var(--brand-dark);
+}
+
+.sheet-tab.is-active {
+  border-bottom-color: var(--brand);
+  color: var(--brand-dark);
+  font-weight: 750;
+}
+
+.status-line {
+  min-height: 36px;
+  padding: 0 12px;
+  flex: 0 0 36px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  color: #567068;
+  background: #f6faf8;
+  font-size: 10px;
+}
+
+/* 状态文字单独靠右显示，过长内容使用省略号，避免挤压工作表标签。 */
+.status-feedback {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.status-feedback #status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-line.is-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.status-line.is-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.status-icon {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+/* ========================================================================== */
+/* 5. 空状态、加载状态与表格容器                                               */
+/* ========================================================================== */
+
+.grid-empty {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.grid-empty strong {
+  margin-top: 17px;
+  color: #405851;
+  font-size: 14px;
+}
+
+.grid-empty p {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.empty-illustration {
+  width: 78px;
+  height: 58px;
+  padding: 7px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 4px;
+  transform: rotate(-3deg);
+  border: 1px solid #bfd5cd;
+  border-radius: 8px;
+  background: #eff8f4;
+  box-shadow: 9px 8px 0 #f7faf9, 9px 8px 0 1px #d6e3df;
+}
+
+.empty-illustration span {
+  border-radius: 2px;
+  background: #c4dfd5;
+}
+
+.grid-viewport {
+  height: auto;
+  min-height: 0;
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  outline: none;
+  background: #fff;
+  scrollbar-color: #b9c9c4 #f1f5f3;
+}
+
+.grid-viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(21, 122, 98, 0.35);
+}
+
+/* 自适应宽度已经严格限制在视口内，不显示因边框舍入产生的横向滚动条。 */
+.grid-viewport.is-raw-fit {
+  overflow-x: hidden;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 48px 0 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(5px);
+}
+
+.loading-overlay[hidden] {
+  display: none;
+}
+
+.loading-overlay strong {
+  margin-top: 5px;
+  font-size: 14px;
+}
+
+.loading-overlay span:not(.spinner) {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid #dcebe6;
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 750ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
