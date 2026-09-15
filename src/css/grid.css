@@ -2,6 +2,125 @@
 /* 6. 表格与虚拟滚动行                                                         */
 /* ========================================================================== */
 
+/*
+ * 原始视图坐标轴位于数据滚动容器之外。轨道由 JavaScript 分别同步 scrollLeft
+ * 和 scrollTop，因此触摸板斜向滚动也不会让行号离开左边或列号离开上边。
+ */
+.raw-axis-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.raw-axis-corner {
+  width: 42px;
+  height: 38px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  overflow: hidden;
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  background: #f4f7f6;
+  pointer-events: auto;
+}
+
+.raw-column-axis {
+  height: 38px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 42px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line-strong);
+  background: #f4f7f6;
+}
+
+.raw-column-axis-track {
+  height: 38px;
+  display: grid;
+  will-change: transform;
+}
+
+.raw-column-pinned-axis,
+.raw-row-pinned-axis {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.raw-column-axis-cell {
+  min-width: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  color: #49625b;
+  background: #f4f7f6;
+  font-size: 11px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.raw-column-pinned-axis .raw-column-axis-cell {
+  position: absolute;
+  top: 0;
+  box-shadow: 2px 0 4px rgba(38, 66, 59, 0.1);
+}
+
+.raw-row-axis {
+  width: 42px;
+  position: absolute;
+  top: 38px;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--line-strong);
+  background: #f4f7f6;
+}
+
+.raw-row-axis-track {
+  width: 42px;
+  position: relative;
+  will-change: transform;
+}
+
+.raw-row-axis-cell {
+  width: 42px;
+  min-height: 1px;
+  position: absolute;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  color: #7b8e88;
+  background: #f4f7f6;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+}
+
+.raw-row-pinned-axis .raw-row-axis-cell {
+  z-index: 2;
+  box-shadow: 0 2px 4px rgba(38, 66, 59, 0.1);
+}
+
+.raw-axis-layer .is-pinned-axis-copy {
+  color: var(--brand-dark);
+  background: #dff0ea;
+}
+
 .grid-header {
   position: sticky;
   top: 0;
@@ -177,7 +296,7 @@ button.grid-header-cell:hover {
 /* 多个固定行在虚拟大表中由一个始终挂载的粘性层承载。 */
 .raw-pinned-rows {
   position: sticky;
-  top: 38px;
+  top: 0;
   z-index: 18;
   width: max-content;
   background: #fff;

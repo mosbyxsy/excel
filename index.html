@@ -168,16 +168,28 @@
           <p>打开一个 Excel 或 CSV 文件即可开始查看。</p>
         </div>
 
-        <!-- 表头与表体分离：表体只挂载可视区域附近的行，实现虚拟滚动。 -->
-        <div class="grid-viewport" id="grid-viewport" tabindex="0" hidden aria-label="工作表内容">
-          <div class="grid-header" id="grid-header"></div>
-          <div class="grid-body" id="grid-body"></div>
-        </div>
+        <!--
+          表格坐标轴与数据滚动区分层：原始视图的列号轴只同步横向位移，行号轴只同步
+          纵向位移，触摸板斜向滚动时也不会把 A/B/C 或 1/2/3 带离对应边缘。
+        -->
+        <div class="grid-frame" id="grid-frame" hidden>
+          <div class="raw-axis-layer" id="raw-axis-layer" hidden aria-label="工作表坐标轴">
+            <div class="raw-axis-corner" id="raw-axis-corner"></div>
+            <div class="raw-column-axis" id="raw-column-axis">
+              <div class="raw-column-axis-track" id="raw-column-axis-track"></div>
+              <div class="raw-column-pinned-axis" id="raw-column-pinned-axis"></div>
+            </div>
+            <div class="raw-row-axis" id="raw-row-axis">
+              <div class="raw-row-axis-track" id="raw-row-axis-track"></div>
+              <div class="raw-row-pinned-axis" id="raw-row-pinned-axis"></div>
+            </div>
+          </div>
 
-        <div class="loading-overlay" id="loading-overlay" hidden>
-          <span class="spinner" aria-hidden="true"></span>
-          <strong id="loading-title">正在读取文件</strong>
-          <span id="loading-detail">请稍候…</span>
+          <!-- 表头与表体分离：虚拟表体只挂载可视区域附近的行。 -->
+          <div class="grid-viewport" id="grid-viewport" tabindex="0" aria-label="工作表内容">
+            <div class="grid-header" id="grid-header"></div>
+            <div class="grid-body" id="grid-body"></div>
+          </div>
         </div>
 
         <!-- 复制成功或失败时短暂显示，不占用工具栏和表格高度。 -->

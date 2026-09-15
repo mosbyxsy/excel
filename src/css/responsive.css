@@ -91,9 +91,6 @@ footer {
     padding-right: 12px;
   }
 
-  .loading-overlay {
-    inset: 82px 0 0;
-  }
 }
 
 /* ========================================================================== */
@@ -321,10 +318,6 @@ footer {
   gap: 8px;
 }
 
-.loading-overlay {
-  inset: 52px 0 0;
-}
-
 /* 中等宽度仍采用单行，只适度压缩文件信息和搜索框。 */
 @media (max-width: 1100px) {
   .viewer-toolbar {
@@ -473,9 +466,6 @@ footer {
     max-width: none;
   }
 
-  .loading-overlay {
-    inset: 80px 0 0;
-  }
 }
 
 @media (max-width: 430px) {

@@ -7,7 +7,6 @@ import {
   DATA_ROW_HEIGHT,
   DEFAULT_RAW_ROW_HEIGHT,
   ROW_NUMBER_WIDTH,
-  RAW_HEADER_HEIGHT,
   RAW_FIT_WIDTH_GUARD,
   DEFAULT_PAGE_TITLE,
   config,
@@ -58,6 +57,7 @@ function setWorkbook(workbook, byteLength, sourcePath, autoFit) {
 
   dom.viewerCard.classList.remove("is-empty");
   dom.empty.hidden = true;
+  dom.gridFrame.hidden = false;
   dom.viewport.hidden = false;
   dom.sheetBar.hidden = false;
   dom.fileName.textContent = workbook.name;
@@ -128,13 +128,21 @@ function enterFileSelection(message, preserveUrl) {
   updateRawSearchControls();
   dom.viewport.scrollTop = 0;
   dom.viewport.scrollLeft = 0;
+  dom.gridFrame.hidden = true;
   dom.viewport.hidden = true;
   dom.sheetBar.hidden = true;
   dom.empty.hidden = true;
   dom.header.replaceChildren();
   dom.body.replaceChildren();
+  dom.rawAxisCorner.replaceChildren();
+  dom.rawColumnAxisTrack.replaceChildren();
+  dom.rawColumnPinnedAxis.replaceChildren();
+  dom.rawRowAxisTrack.replaceChildren();
+  dom.rawRowPinnedAxis.replaceChildren();
+  dom.rawAxisLayer.hidden = true;
   dom.sheetTabs.replaceChildren();
-  hideLoading();
+  // 初始化流程使用 preserveUrl=true，此时全屏启动层必须持续到配置和默认文件处理完毕。
+  if (!preserveUrl) hideLoading();
   hideCopyToast();
 
   for (const button of dom.viewSwitch.querySelectorAll("button")) {
@@ -164,6 +172,7 @@ function beginFileLoad(fileName) {
   setSourceMessage("");
   dom.viewerCard.classList.remove("is-empty");
   dom.empty.hidden = true;
+  dom.gridFrame.hidden = true;
   dom.viewport.hidden = true;
   dom.sheetBar.hidden = true;
   dom.fileName.textContent = fileName || "正在打开文件";
@@ -220,6 +229,8 @@ function renderCurrentSheet() {
   dom.body.replaceChildren();
   dom.header.hidden = false;
   dom.body.hidden = false;
+  dom.gridFrame.classList.toggle("is-raw", state.view === "raw");
+  dom.rawAxisLayer.hidden = state.view !== "raw";
   // 自适应时禁止横向滚动；切换到数据视图或恢复原宽后立即恢复正常滚动。
   dom.viewport.classList.toggle("is-raw-fit", state.view === "raw" && state.rawFitEnabled);
   // 两种视图都支持搜索：数据视图过滤行，原始视图只高亮匹配单元格。
@@ -244,7 +255,7 @@ function renderCurrentSheet() {
 /**
  * 计算原始视图的显示列宽。
  * 开启自适应后只使用一个统一缩放系数，所以各列仍严格保持 Excel 原宽比例；
- * 行号列固定不参与缩放，剩余宽度全部交给数据列。
+ * 行号轴已经位于数据滚动区外，当前 viewport 宽度可全部交给数据列。
  */
 function rawDisplayWidths(sheet, columns) {
   const originalWidths = columns.map((columnIndex) => sheet.colWidths[columnIndex].width);
@@ -253,7 +264,7 @@ function rawDisplayWidths(sheet, columns) {
   const originalTotal = originalWidths.reduce((sum, width) => sum + width, 0);
   const availableWidth = Math.max(
     1,
-    dom.viewport.clientWidth - ROW_NUMBER_WIDTH - RAW_FIT_WIDTH_GUARD
+    dom.viewport.clientWidth - RAW_FIT_WIDTH_GUARD
   );
   if (!originalTotal || !Number.isFinite(availableWidth)) return originalWidths;
   const scale = availableWidth / originalTotal;
@@ -275,7 +286,7 @@ function visiblePinnedColumns(sheet) {
 }
 
 /**
- * 多个固定行从表头下方依次堆叠。
+ * 多个固定行从数据视口顶部依次堆叠。
  *
  * 这里先使用 Excel 行高生成一个可立即使用的初始偏移；标准 table 插入 DOM 后，
  * 还会由 syncRawTablePinnedRowOffsets() 按浏览器实际排版高度重新校准。因为字号、
@@ -283,29 +294,32 @@ function visiblePinnedColumns(sheet) {
  * 行高会让后面的固定行覆盖前面的固定行，看起来像被“挤压”在一起。
  */
 function pinnedRowTop(sheet, rowIndex) {
-  return RAW_HEADER_HEIGHT + visiblePinnedRows(sheet)
+  return visiblePinnedRows(sheet)
     .filter((candidate) => candidate < rowIndex)
     .reduce((sum, candidate) => sum + (sheet.rowHeights[candidate] || DEFAULT_RAW_ROW_HEIGHT), 0);
 }
 
 /**
- * 标准 table 完成排版后，使用 thead 和各固定 tr 的真实高度重新计算 sticky top。
+ * 标准 table 完成排版后，使用各固定 tr 的真实高度重新计算 sticky top。
  * 虚拟滚动表格的行高由 grid-row 明确锁定，不需要进行这一步；小表则必须以 DOM
  * 实测结果为准，才能兼容大字号、换行、边框以及 rowspan 造成的行高扩张。
  */
 function syncRawTablePinnedRowOffsets(table, sheet) {
   const pinnedRows = new Set(visiblePinnedRows(sheet));
-  if (!pinnedRows.size) return;
-
-  const renderedHeaderHeight = table.tHead
-    ? table.tHead.getBoundingClientRect().height
-    : 0;
-  let stickyTop = renderedHeaderHeight || RAW_HEADER_HEIGHT;
   const body = table.tBodies[0];
-  if (!body) return;
+  if (!body) return [];
 
+  let sourceTop = 0;
+  let stickyTop = 0;
+  const entries = [];
   for (const rowElement of body.rows) {
     const rowIndex = Number(rowElement.dataset.sourceRowIndex);
+    if (rowElement.hidden) continue;
+    const renderedRowHeight = rowElement.getBoundingClientRect().height
+      || sheet.rowHeights[rowIndex]
+      || DEFAULT_RAW_ROW_HEIGHT;
+    entries.push({ sourceIndex: rowIndex, top: sourceTop, height: renderedRowHeight });
+    sourceTop += renderedRowHeight;
     if (!pinnedRows.has(rowIndex)) continue;
 
     // 只修改当前 tr 中参与固定的单元格，避免影响普通行和跨列合并结构。
@@ -315,21 +329,19 @@ function syncRawTablePinnedRowOffsets(table, sheet) {
       }
     }
 
-    const renderedRowHeight = rowElement.getBoundingClientRect().height;
-    stickyTop += renderedRowHeight
-      || sheet.rowHeights[rowIndex]
-      || DEFAULT_RAW_ROW_HEIGHT;
+    stickyTop += renderedRowHeight;
   }
+  return entries;
 }
 
-/** 多个固定列从行号列右侧依次堆叠，自适应开启时使用缩放后的实时列宽。 */
+/** 多个固定列从数据视口左侧依次堆叠，自适应开启时使用缩放后的实时列宽。 */
 function pinnedColumnLeft(sheet, columnIndex) {
   const visibleColumns = visibleColumnIndices(sheet);
   const displayWidths = rawDisplayWidths(sheet, visibleColumns);
   const widthByColumn = new Map(
     visibleColumns.map((candidate, index) => [candidate, displayWidths[index]])
   );
-  return ROW_NUMBER_WIDTH + visiblePinnedColumns(sheet)
+  return visiblePinnedColumns(sheet)
     .filter((candidate) => candidate < columnIndex)
     .reduce((sum, candidate) => sum + (widthByColumn.get(candidate) || 0), 0);
 }
@@ -387,12 +399,12 @@ function toggleRawAxisPin(axis, index) {
   });
 }
 
-function gridTemplate(sheet, columns, useRawFit) {
+function gridTemplate(sheet, columns, useRawFit, includeRowNumber = true) {
   const widths = useRawFit
     ? rawDisplayWidths(sheet, columns)
     : columns.map((index) => sheet.colWidths[index].dataWidth || sheet.colWidths[index].width);
   return [
-    `${ROW_NUMBER_WIDTH}px`,
+    ...(includeRowNumber ? [`${ROW_NUMBER_WIDTH}px`] : []),
     ...widths.map((width) => `${width}px`)
   ].join(" ");
 }
@@ -421,6 +433,135 @@ function createRawFitToggle() {
     renderCurrentSheet();
   });
   return button;
+}
+
+/** 创建原始视图的行号或列号控件，并复用既有的多选固定语义。 */
+function createRawAxisCell(axis, index, text) {
+  const cell = document.createElement("div");
+  cell.className = `raw-${axis}-axis-cell`;
+  cell.textContent = text;
+  prepareAxisPinControl(cell, axis, index);
+  return cell;
+}
+
+/**
+ * 绘制独立的顶部列号轴。普通列号轨道只做横向 transform，固定列号则绘制在
+ * 不移动的覆盖层中；这样触摸板产生纵向分量时，A/B/C 仍始终贴住顶部。
+ */
+function renderRawColumnAxis(sheet, columns) {
+  const widths = rawDisplayWidths(sheet, columns);
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+  const widthByColumn = new Map(columns.map((columnIndex, index) => [columnIndex, widths[index]]));
+  const leftByColumn = new Map();
+  let sourceLeft = 0;
+
+  dom.rawAxisCorner.replaceChildren(createRawFitToggle());
+  dom.rawColumnAxisTrack.replaceChildren();
+  dom.rawColumnPinnedAxis.replaceChildren();
+  dom.rawColumnAxisTrack.style.width = `${totalWidth}px`;
+  dom.rawColumnAxisTrack.style.gridTemplateColumns = widths.map((width) => `${width}px`).join(" ");
+
+  for (const columnIndex of columns) {
+    leftByColumn.set(columnIndex, sourceLeft);
+    const cell = createRawAxisCell("column", columnIndex, columnLetter(columnIndex));
+    if (state.pinnedColumns.has(columnIndex)) {
+      cell.dataset.pinnedSource = "true";
+      cell.dataset.sourceOffset = String(sourceLeft);
+      cell.dataset.pinnedOffset = String(pinnedColumnLeft(sheet, columnIndex));
+    }
+    dom.rawColumnAxisTrack.appendChild(cell);
+    sourceLeft += widthByColumn.get(columnIndex) || 0;
+  }
+
+  for (const columnIndex of visiblePinnedColumns(sheet)) {
+    const pinnedCell = createRawAxisCell("column", columnIndex, columnLetter(columnIndex));
+    const pinnedLeft = pinnedColumnLeft(sheet, columnIndex);
+    pinnedCell.classList.add("is-pinned-axis-copy");
+    pinnedCell.dataset.sourceOffset = String(leftByColumn.get(columnIndex) || 0);
+    pinnedCell.dataset.pinnedOffset = String(pinnedLeft);
+    pinnedCell.style.left = `${pinnedLeft}px`;
+    pinnedCell.style.width = `${widthByColumn.get(columnIndex) || 0}px`;
+    pinnedCell.hidden = true;
+    dom.rawColumnPinnedAxis.appendChild(pinnedCell);
+  }
+}
+
+/**
+ * 绘制独立的左侧行号轴。entries 使用与数据区完全相同的源位置和真实高度；
+ * 普通轨道只同步纵向位移，固定行号副本则留在不移动的覆盖层中。
+ */
+function renderRawRowAxis(
+  sheet,
+  entries,
+  totalHeight,
+  visibleStart = 0,
+  visibleEnd = entries.length - 1,
+  pinnedAlways = false
+) {
+  const entryByRow = new Map(entries.map((entry) => [entry.sourceIndex, entry]));
+  dom.rawRowAxisTrack.replaceChildren();
+  dom.rawRowPinnedAxis.replaceChildren();
+  dom.rawRowAxisTrack.style.height = `${totalHeight}px`;
+
+  for (let index = visibleStart; index <= visibleEnd; index += 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    const cell = createRawAxisCell("row", entry.sourceIndex, String(entry.sourceIndex + 1));
+    cell.style.top = `${entry.top}px`;
+    cell.style.height = `${entry.height}px`;
+    if (state.pinnedRows.has(entry.sourceIndex)) {
+      cell.dataset.pinnedSource = "true";
+    }
+    dom.rawRowAxisTrack.appendChild(cell);
+  }
+
+  let pinnedTop = 0;
+  for (const rowIndex of visiblePinnedRows(sheet)) {
+    const entry = entryByRow.get(rowIndex);
+    if (!entry) continue;
+    const pinnedCell = createRawAxisCell("row", rowIndex, String(rowIndex + 1));
+    pinnedCell.classList.add("is-pinned-axis-copy");
+    pinnedCell.dataset.sourceOffset = String(pinnedAlways ? 0 : entry.top);
+    pinnedCell.dataset.pinnedOffset = String(pinnedTop);
+    pinnedCell.style.top = `${pinnedTop}px`;
+    pinnedCell.style.height = `${entry.height}px`;
+    pinnedCell.hidden = true;
+    dom.rawRowPinnedAxis.appendChild(pinnedCell);
+
+    const sourceCell = dom.rawRowAxisTrack.querySelector(`[data-pin-index="${rowIndex}"]`);
+    if (sourceCell) {
+      sourceCell.dataset.sourceOffset = String(pinnedAlways ? 0 : entry.top);
+      sourceCell.dataset.pinnedOffset = String(pinnedTop);
+    }
+    pinnedTop += entry.height;
+  }
+}
+
+/**
+ * 将数据区滚动量投影到两个独立坐标轴，并切换已经到达冻结边界的固定轴副本。
+ * 这里只写 transform/hidden，不读取布局，可安全地在 requestAnimationFrame 中调用。
+ */
+function syncRawAxesScroll() {
+  if (!state.workbook || state.view !== "raw" || dom.rawAxisLayer.hidden) return;
+  const scrollLeft = dom.viewport.scrollLeft;
+  const scrollTop = dom.viewport.scrollTop;
+  dom.rawColumnAxisTrack.style.transform = `translate3d(${-scrollLeft}px, 0, 0)`;
+  dom.rawRowAxisTrack.style.transform = `translate3d(0, ${-scrollTop}px, 0)`;
+
+  for (const source of dom.rawColumnAxisTrack.querySelectorAll('[data-pinned-source="true"]')) {
+    const active = scrollLeft + Number(source.dataset.pinnedOffset) >= Number(source.dataset.sourceOffset);
+    source.style.visibility = active ? "hidden" : "visible";
+  }
+  for (const copy of dom.rawColumnPinnedAxis.children) {
+    copy.hidden = !(scrollLeft + Number(copy.dataset.pinnedOffset) >= Number(copy.dataset.sourceOffset));
+  }
+  for (const source of dom.rawRowAxisTrack.querySelectorAll('[data-pinned-source="true"]')) {
+    const active = scrollTop + Number(source.dataset.pinnedOffset) >= Number(source.dataset.sourceOffset);
+    source.style.visibility = active ? "hidden" : "visible";
+  }
+  for (const copy of dom.rawRowPinnedAxis.children) {
+    copy.hidden = !(scrollTop + Number(copy.dataset.pinnedOffset) >= Number(copy.dataset.sourceOffset));
+  }
 }
 
 function visibleColumnIndices(sheet) {
@@ -510,15 +651,16 @@ function applyRawSearchState(element, rowIndex, columnIndex) {
 
 function renderRawView(sheet) {
   const rows = sheet.rows.filter((row) => !row.hidden);
+  const columns = visibleColumnIndices(sheet);
+  dom.header.hidden = true;
+  renderRawColumnAxis(sheet, columns);
   const virtual = rows.length > config.virtualizationThreshold;
   if (!virtual) {
-    renderRawTable(sheet);
+    renderRawTable(sheet, columns);
     setSheetStatus(sheet, false, rows.length);
     return;
   }
 
-  const columns = visibleColumnIndices(sheet);
-  renderRawHeader(sheet, columns);
   const renderRows = rows.map((row) => ({
     sourceRow: row,
     sourceIndex: row.sourceIndex,
@@ -530,28 +672,24 @@ function renderRawView(sheet) {
     columns,
     rows: renderRows,
     heights: renderRows.map((row) => row.height),
-    template: gridTemplate(sheet, columns, true)
+    template: gridTemplate(sheet, columns, true, false)
   });
   setSheetStatus(sheet, true, rows.length);
 }
 
 /** 小表使用标准 table，浏览器可以原生、可靠地处理 rowspan 与 colspan。 */
-function renderRawTable(sheet) {
+function renderRawTable(sheet, visibleColumns) {
   dom.header.hidden = true;
   dom.body.hidden = true;
   const table = document.createElement("table");
   table.className = "raw-table";
-  // 标准 table 在设置 min-width: 100% 时会按比例拉宽行号列；固定实际总宽可避免该问题。
-  const visibleColumns = visibleColumnIndices(sheet);
+  // 行号与列号已移出滚动区，table 的宽度只包含真实数据列。
   const displayedWidths = rawDisplayWidths(sheet, visibleColumns);
   const displayedWidthByColumn = new Map(
     visibleColumns.map((columnIndex, index) => [columnIndex, displayedWidths[index]])
   );
-  table.style.width = `${ROW_NUMBER_WIDTH + displayedWidths.reduce((sum, width) => sum + width, 0)}px`;
+  table.style.width = `${displayedWidths.reduce((sum, width) => sum + width, 0)}px`;
   const colgroup = document.createElement("colgroup");
-  const numberColumn = document.createElement("col");
-  numberColumn.style.width = `${ROW_NUMBER_WIDTH}px`;
-  colgroup.appendChild(numberColumn);
   for (let columnIndex = 0; columnIndex < sheet.maxCols; columnIndex += 1) {
     const column = document.createElement("col");
     const metadata = sheet.colWidths[columnIndex];
@@ -561,24 +699,6 @@ function renderRawTable(sheet) {
   }
   table.appendChild(colgroup);
 
-  const thead = document.createElement("thead");
-  const headerRow = document.createElement("tr");
-  const cornerHeader = document.createElement("th");
-  cornerHeader.className = "raw-fit-corner";
-  cornerHeader.appendChild(createRawFitToggle());
-  headerRow.appendChild(cornerHeader);
-  for (let columnIndex = 0; columnIndex < sheet.maxCols; columnIndex += 1) {
-    const header = document.createElement("th");
-    header.textContent = columnLetter(columnIndex);
-    if (sheet.colWidths[columnIndex].hidden) header.style.display = "none";
-    prepareAxisPinControl(header, "column", columnIndex);
-    applyPinnedCellPosition(header, sheet, null, columnIndex, false);
-    if (state.pinnedColumns.has(columnIndex)) header.style.zIndex = "25";
-    headerRow.appendChild(header);
-  }
-  thead.appendChild(headerRow);
-  table.appendChild(thead);
-
   const mergeLookup = buildMergeLookup(sheet);
   const tbody = document.createElement("tbody");
   for (const row of sheet.rows) {
@@ -587,13 +707,6 @@ function renderRawTable(sheet) {
     tr.dataset.sourceRowIndex = String(row.sourceIndex);
     if (row.hidden) tr.hidden = true;
     tr.style.height = `${sheet.rowHeights[row.sourceIndex] || DEFAULT_RAW_ROW_HEIGHT}px`;
-    const rowHeader = document.createElement("th");
-    rowHeader.scope = "row";
-    rowHeader.textContent = String(row.sourceIndex + 1);
-    prepareAxisPinControl(rowHeader, "row", row.sourceIndex);
-    applyPinnedCellPosition(rowHeader, sheet, row.sourceIndex, null, false);
-    if (state.pinnedRows.has(row.sourceIndex)) rowHeader.style.zIndex = "17";
-    tr.appendChild(rowHeader);
 
     for (let columnIndex = 0; columnIndex < sheet.maxCols; columnIndex += 1) {
       const merge = mergeLookup.get(`${row.sourceIndex}:${columnIndex}`);
@@ -617,23 +730,10 @@ function renderRawTable(sheet) {
   table.appendChild(tbody);
   dom.viewport.appendChild(table);
   // table 只有进入文档后才能取得包含字体、换行和边框影响的准确行高。
-  syncRawTablePinnedRowOffsets(table, sheet);
-}
-
-function renderRawHeader(sheet, columns) {
-  dom.header.style.gridTemplateColumns = gridTemplate(sheet, columns, true);
-  const cornerHeader = createHeaderCell("", -1, false, true);
-  cornerHeader.classList.add("raw-fit-corner");
-  // createHeaderCell 默认带一个文本 span；角标只保留图标按钮，避免多余节点占宽。
-  cornerHeader.replaceChildren(createRawFitToggle());
-  dom.header.appendChild(cornerHeader);
-  for (const columnIndex of columns) {
-    const header = createHeaderCell(columnLetter(columnIndex), columnIndex, false, false);
-    prepareAxisPinControl(header, "column", columnIndex);
-    applyPinnedCellPosition(header, sheet, null, columnIndex, false);
-    if (state.pinnedColumns.has(columnIndex)) header.style.zIndex = "25";
-    dom.header.appendChild(header);
-  }
+  const rowEntries = syncRawTablePinnedRowOffsets(table, sheet);
+  const totalHeight = rowEntries.reduce((sum, entry) => sum + entry.height, 0);
+  renderRawRowAxis(sheet, rowEntries, totalHeight);
+  syncRawAxesScroll();
 }
 
 function prepareDataModel(sheet) {
@@ -775,7 +875,7 @@ function templateWidth(sheet, columns, useRawFit) {
   const widths = useRawFit
     ? rawDisplayWidths(sheet, columns)
     : columns.map((index) => sheet.colWidths[index].dataWidth || sheet.colWidths[index].width);
-  return ROW_NUMBER_WIDTH + widths.reduce((sum, width) => sum + width, 0);
+  return (useRawFit ? 0 : ROW_NUMBER_WIDTH) + widths.reduce((sum, width) => sum + width, 0);
 }
 
 /**
@@ -853,7 +953,8 @@ function createPinnedRowsOverlay(renderer) {
 function renderVirtualWindow(force) {
   const renderer = state.renderer;
   if (!renderer || !renderer.rows.length) return;
-  const bodyTop = dom.header.offsetHeight;
+  // 原始视图的列号轴位于滚动区外，因此虚拟数据从 scrollTop=0 开始。
+  const bodyTop = renderer.kind === "raw" ? 0 : dom.header.offsetHeight;
   const visibleTop = Math.max(0, dom.viewport.scrollTop - bodyTop);
   const visibleBottom = visibleTop + dom.viewport.clientHeight;
   const firstVisible = findRowAtOffset(renderer.prefix, visibleTop);
@@ -863,6 +964,15 @@ function renderVirtualWindow(force) {
   const rangeKey = `${start}:${end}`;
   if (!force && rangeKey === renderer.lastRange) return;
   renderer.lastRange = rangeKey;
+
+  if (renderer.kind === "raw") {
+    const axisEntries = renderer.rows.map((entry, index) => ({
+      sourceIndex: entry.sourceIndex,
+      top: renderer.prefix[index],
+      height: renderer.heights[index]
+    }));
+    renderRawRowAxis(renderer.sheet, axisEntries, renderer.totalHeight, start, end, true);
+  }
 
   const fragment = document.createDocumentFragment();
   const pinnedOverlay = createPinnedRowsOverlay(renderer);
@@ -882,6 +992,7 @@ function renderVirtualWindow(force) {
     }));
   }
   dom.body.replaceChildren(fragment);
+  if (renderer.kind === "raw") syncRawAxesScroll();
 }
 
 function createGridRow(options) {
@@ -891,21 +1002,13 @@ function createGridRow(options) {
   rowElement.style.height = `${options.height}px`;
   if (options.virtual) rowElement.style.transform = `translateY(${options.top}px)`;
 
-  const rowNumber = document.createElement("div");
-  rowNumber.className = "grid-cell is-row-number";
-  rowNumber.textContent = String(options.entry.sourceIndex + 1);
-  if (options.kind === "raw") {
-    prepareAxisPinControl(rowNumber, "row", options.entry.sourceIndex);
-    applyPinnedCellPosition(
-      rowNumber,
-      options.sheet,
-      options.entry.sourceIndex,
-      null,
-      Boolean(options.pinnedOverlay)
-    );
-    if (state.pinnedRows.has(options.entry.sourceIndex)) rowNumber.style.zIndex = "17";
+  // 数据视图仍在表内显示“#”坐标列；原始视图的行号由独立左轴负责。
+  if (options.kind === "data") {
+    const rowNumber = document.createElement("div");
+    rowNumber.className = "grid-cell is-row-number";
+    rowNumber.textContent = String(options.entry.sourceIndex + 1);
+    rowElement.appendChild(rowNumber);
   }
-  rowElement.appendChild(rowNumber);
 
   if (options.kind === "raw") appendRawCells(rowElement, options);
   else appendDataCells(rowElement, options);
@@ -1099,6 +1202,7 @@ export {
   setView,
   renderCurrentSheet,
   renderVirtualWindow,
+  syncRawAxesScroll,
   revealRawMatch,
   stepRawMatch,
   // 暴露给 main.js 的事件代理使用；固定状态和重新渲染仍由视图模块集中管理。

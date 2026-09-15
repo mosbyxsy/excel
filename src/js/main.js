@@ -31,6 +31,7 @@ import {
   setView,
   renderCurrentSheet,
   renderVirtualWindow,
+  syncRawAxesScroll,
   revealRawMatch,
   stepRawMatch,
   // 行号、列号的点击事件由入口模块统一代理，因此需要显式导入固定切换函数。
@@ -47,6 +48,10 @@ async function loadArrayBuffer(buffer, fileName, typeHint, byteLength, sequence,
   await nextPaint();
   try {
     const workbook = await parseWorkbook(buffer, fileName, typeHint);
+    if (sequence !== state.loadSequence) return;
+    // 解析完成后先让浏览器绘制“正在打开”阶段，再执行工作表标签和表格 DOM 渲染。
+    showLoading("正在打开工作表", fileName);
+    await nextPaint();
     if (sequence !== state.loadSequence) return;
     setWorkbook(workbook, byteLength, sourcePath, autoFit);
   } catch (error) {
@@ -441,9 +446,9 @@ dom.searchPrev.addEventListener("click", () => stepRawMatch(-1));
 dom.searchNext.addEventListener("click", () => stepRawMatch(1));
 
 // 使用事件委托，虚拟滚动中新创建的行列标记和数据单元格无需逐个绑定事件。
-dom.viewport.addEventListener("click", (event) => {
+dom.gridFrame.addEventListener("click", (event) => {
   const pinTarget = event.target.closest("[data-pin-axis][data-pin-index]");
-  if (pinTarget && dom.viewport.contains(pinTarget)) {
+  if (pinTarget && dom.gridFrame.contains(pinTarget)) {
     event.preventDefault();
     toggleRawAxisPin(pinTarget.dataset.pinAxis, Number(pinTarget.dataset.pinIndex));
     return;
@@ -455,19 +460,21 @@ dom.viewport.addEventListener("click", (event) => {
 });
 
 /** 非原生 button 的 th/div 轴标记支持 Enter 和空格键切换固定状态。 */
-dom.viewport.addEventListener("keydown", (event) => {
+dom.gridFrame.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" && event.key !== " ") return;
   const pinTarget = event.target.closest("[data-pin-axis][data-pin-index]");
-  if (!pinTarget || !dom.viewport.contains(pinTarget)) return;
+  if (!pinTarget || !dom.gridFrame.contains(pinTarget)) return;
   event.preventDefault();
   toggleRawAxisPin(pinTarget.dataset.pinAxis, Number(pinTarget.dataset.pinIndex));
 });
 
 dom.viewport.addEventListener("scroll", () => {
-  if (!state.renderer || state.renderFrame) return;
+  if (state.renderFrame) return;
   state.renderFrame = requestAnimationFrame(() => {
     state.renderFrame = 0;
-    renderVirtualWindow(false);
+    // 原始视图坐标轴位于滚动区外，只在这一帧同步对应方向的位移。
+    syncRawAxesScroll();
+    if (state.renderer) renderVirtualWindow(false);
   });
 }, { passive: true });
 

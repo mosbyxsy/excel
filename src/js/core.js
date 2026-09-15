@@ -80,12 +80,18 @@ const dom = {
   statusLine: document.getElementById("status-line"),
   statusText: document.getElementById("status-text"),
   empty: document.getElementById("grid-empty"),
+  gridFrame: document.getElementById("grid-frame"),
   viewport: document.getElementById("grid-viewport"),
   header: document.getElementById("grid-header"),
   body: document.getElementById("grid-body"),
-  loading: document.getElementById("loading-overlay"),
-  loadingTitle: document.getElementById("loading-title"),
-  loadingDetail: document.getElementById("loading-detail"),
+  rawAxisLayer: document.getElementById("raw-axis-layer"),
+  rawAxisCorner: document.getElementById("raw-axis-corner"),
+  rawColumnAxis: document.getElementById("raw-column-axis"),
+  rawColumnAxisTrack: document.getElementById("raw-column-axis-track"),
+  rawColumnPinnedAxis: document.getElementById("raw-column-pinned-axis"),
+  rawRowAxis: document.getElementById("raw-row-axis"),
+  rawRowAxisTrack: document.getElementById("raw-row-axis-track"),
+  rawRowPinnedAxis: document.getElementById("raw-row-pinned-axis"),
   startupLoader: document.getElementById("startup-loader"),
   startupLoadingTitle: document.getElementById("startup-loading-title"),
   startupLoadingDetail: document.getElementById("startup-loading-detail")
@@ -218,10 +224,16 @@ function replaceStartupFilePath(filePath) {
   window.history.replaceState(window.history.state, "", nextUrl.href);
 }
 
-/** 更新全屏启动动画中的阶段说明。 */
+/**
+ * 显示统一的全屏加载动画并更新阶段说明。
+ * 页面准备、清单下载、工作簿下载、解析和打开都调用同一入口，避免不同阶段在
+ * “全屏轨道动画”和“表格内小转圈”之间跳变。
+ */
 function setStartupLoading(title, detail) {
   dom.startupLoadingTitle.textContent = title || "正在准备工作表";
   dom.startupLoadingDetail.textContent = detail || "请稍候…";
+  dom.startupLoader.removeAttribute("aria-hidden");
+  document.documentElement.classList.add("is-startup-loading");
 }
 
 /** 完成查询参数启动流程，并确保遮罩不再拦截页面操作。 */
@@ -246,13 +258,11 @@ function setStatus(message, type) {
 }
 
 function showLoading(title, detail) {
-  dom.loadingTitle.textContent = title || "正在读取文件";
-  dom.loadingDetail.textContent = detail || "请稍候…";
-  dom.loading.hidden = false;
+  setStartupLoading(title || "正在读取文件", detail || "请稍候…");
 }
 
 function hideLoading() {
-  dom.loading.hidden = true;
+  finishStartupLoading();
 }
 
 /** 在查看器底部短暂显示复制反馈，不改写右侧的工作表状态信息。 */
