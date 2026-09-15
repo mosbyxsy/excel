@@ -224,3 +224,7 @@ JavaScript 的依赖方向保持单向：`main.js` 组合解析器和渲染器�
 `config.js` 刻意保留为普通脚本并暴露 `window.EXCEL_VIEWER_CONFIG`，便于部署人员不修改源码模块就能调整文件清单。ExcelJS、SheetJS 和 JSZip 也继续使用固定版本的浏览器 CDN 包，由 `index.html` 在主模块之前加载。
 
 CSS 按上方顺序在 `index.html` 中直接引用；后加载的响应式样式可以覆盖基础规则。增删或调整这些 `<link>` 时应保持该顺序。所有源码均由浏览器直接加载，不需要 `package.json`、npm 或任何构建命令。
+
+## todo
+
+- [ ] 超级表样式还未还原，部分表体字体颜色（目前都是黑色）和汇总填充颜色错乱，具体可以可以看[超级表测试](./excel/超级表测试.xlsx)
