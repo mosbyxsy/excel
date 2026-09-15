@@ -113,7 +113,7 @@ body {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: url("favicon.svg") center / contain no-repeat;
+  background: url("../../favicon.svg") center / contain no-repeat;
   box-shadow: 0 12px 30px rgba(21, 122, 98, 0.28);
   animation: startup-pulse 1.8s ease-in-out infinite;
 }

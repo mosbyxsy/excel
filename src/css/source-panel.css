@@ -25,7 +25,7 @@
   display: block;
   flex: 0 0 auto;
   border-radius: 11px;
-  background: url("favicon.svg") center / contain no-repeat;
+  background: url("../../favicon.svg") center / contain no-repeat;
   box-shadow: 0 7px 18px rgba(21, 122, 98, 0.24);
 }
 
