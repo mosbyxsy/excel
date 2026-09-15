@@ -60,8 +60,14 @@ window.EXCEL_VIEWER_CONFIG = {
     url: "/excel/Mac平台Edge全量快捷键.xlsx",
     type: "xlsx",
     autoFit: false
-  }, {
+  }, , {
     id: "local_id_7",
+    name: "Windows和Mac快捷键",
+    url: "/excel/Windows和Mac快捷键.xlsx",
+    type: "xlsx",
+    autoFit: true
+  }, {
+    id: "local_id_8",
     name: "超级表测试",
     url: "/excel/超级表测试.xlsx",
     type: "xlsx",
