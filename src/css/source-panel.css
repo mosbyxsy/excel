@@ -307,17 +307,20 @@
 }
 
 .preset-options {
-  width: 100%;
+  /*
+   * 列表在 main.js 中移动到 body 顶层，并由脚本写入 left/top/bottom/width。
+   * 使用 fixed 可避免菜单扩大 source-panel 的滚动区域，也不会被卡片裁切。
+   */
   max-height: 220px;
   padding: 5px;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 80;
+  position: fixed;
+  z-index: 1200;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid #c8d9d3;
   border-radius: 11px;
-  background: rgba(255, 255, 255, 0.98);
+  /* 完全不透明，避免菜单下方的 URL 标签和输入框文字透出来。 */
+  background: #fff;
   box-shadow: 0 14px 36px rgba(27, 61, 52, 0.18);
   scrollbar-width: thin;
   scrollbar-color: #b4c9c1 transparent;
@@ -444,4 +447,3 @@
   border-color: #a8beb7;
   background: #eef4f2;
 }
-

@@ -25,19 +25,43 @@ window.EXCEL_VIEWER_CONFIG = {
    */
   files: [{
     id: "local_id_1",
-    name: "IDE编辑器快捷键",
-    url: "/excel/ide_key.xlsx",
+    name: "Webstrom和VScode快捷键",
+    url: "/excel/Webstrom和VScode快捷键.xlsx",
     type: "xlsx",
     action: "open",
     autoFit: false
   }, {
     id: "local_id_2",
-    name: "Edge浏览器快捷键",
-    url: "/excel/edge_key.xlsx",
+    name: "Windows和Mac平台Edge全量快捷键",
+    url: "/excel/Windows和Mac平台Edge全量快捷键.xlsx",
     type: "xlsx",
     autoFit: false
   }, {
     id: "local_id_3",
+    name: "Windows快捷键总表",
+    url: "/excel/Windows快捷键总表.xlsx",
+    type: "xlsx",
+    autoFit: false
+  }, {
+    id: "local_id_4",
+    name: "Windows平台Edge全量快捷键",
+    url: "/excel/Windows平台Edge全量快捷键.xlsx",
+    type: "xlsx",
+    autoFit: false
+  }, {
+    id: "local_id_5",
+    name: "Mac快捷键总表",
+    url: "/excel/Mac快捷键总表.xlsx",
+    type: "xlsx",
+    autoFit: false
+  }, {
+    id: "local_id_6",
+    name: "Mac平台Edge全量快捷键",
+    url: "/excel/Mac平台Edge全量快捷键.xlsx",
+    type: "xlsx",
+    autoFit: false
+  }, {
+    id: "local_id_7",
     name: "超级表测试",
     url: "/excel/超级表测试.xlsx",
     type: "xlsx",

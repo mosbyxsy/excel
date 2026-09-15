@@ -194,11 +194,54 @@ function mergePresetFiles(remoteFiles, configuredFiles) {
   return merged;
 }
 
+/**
+ * 根据触发按钮在视口中的实时位置布置顶层菜单。
+ *
+ * 菜单优先向下打开；下方空间不足且上方更宽裕时改为向上打开。最大高度始终
+ * 限制在可视区域内，选项过多时只滚动菜单自身，不再让整个文件选择卡片滚动。
+ */
+function positionPresetMenu() {
+  const triggerRect = dom.presetTrigger.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const viewportGap = 8;
+  const menuGap = 6;
+  const preferredHeight = 220;
+  const minimumUsefulHeight = 96;
+  const availableBelow = viewportHeight - triggerRect.bottom - menuGap - viewportGap;
+  const availableAbove = triggerRect.top - menuGap - viewportGap;
+  const openAbove = availableBelow < minimumUsefulHeight && availableAbove > availableBelow;
+  const availableHeight = Math.max(
+    64,
+    Math.min(preferredHeight, openAbove ? availableAbove : availableBelow)
+  );
+  const menuWidth = Math.max(
+    0,
+    Math.min(triggerRect.width, viewportWidth - viewportGap * 2)
+  );
+  const menuLeft = Math.max(
+    viewportGap,
+    Math.min(triggerRect.left, viewportWidth - viewportGap - menuWidth)
+  );
+
+  dom.presetOptions.style.width = `${menuWidth}px`;
+  dom.presetOptions.style.left = `${menuLeft}px`;
+  dom.presetOptions.style.maxHeight = `${availableHeight}px`;
+  if (openAbove) {
+    dom.presetOptions.style.top = "auto";
+    dom.presetOptions.style.bottom = `${viewportHeight - triggerRect.top + menuGap}px`;
+  } else {
+    dom.presetOptions.style.top = `${triggerRect.bottom + menuGap}px`;
+    dom.presetOptions.style.bottom = "auto";
+  }
+}
+
 /** 展开或收起自定义下拉，同时同步无障碍状态。 */
 function setPresetMenuOpen(open, focusSelected) {
   const canOpen = Boolean(open && state.presetFiles.length && !dom.presetTrigger.disabled);
   dom.presetFile.classList.toggle("is-open", canOpen);
   dom.presetTrigger.setAttribute("aria-expanded", String(canOpen));
+  if (canOpen) positionPresetMenu();
   dom.presetOptions.hidden = !canOpen;
   if (canOpen && focusSelected) {
     const selected = dom.presetOptions.querySelector('[aria-selected="true"]');
@@ -333,8 +376,19 @@ dom.presetOptions.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("click", (event) => {
-  if (!dom.presetFile.contains(event.target)) setPresetMenuOpen(false, false);
+  // 菜单已提升到 body，点击列表本身仍属于下拉内部操作，不能被判定为外部点击。
+  if (!dom.presetFile.contains(event.target) && !dom.presetOptions.contains(event.target)) {
+    setPresetMenuOpen(false, false);
+  }
 });
+
+// 菜单使用视口坐标；窗口缩放或任意滚动容器移动时同步其锚点位置。
+window.addEventListener("resize", () => {
+  if (!dom.presetOptions.hidden) positionPresetMenu();
+});
+document.addEventListener("scroll", () => {
+  if (!dom.presetOptions.hidden) positionPresetMenu();
+}, true);
 
 dom.loadPreset.addEventListener("click", () => {
   const item = selectedPreset();
@@ -482,4 +536,6 @@ async function initializePage() {
   finishStartupLoading();
 }
 
+// 将列表框提升到 body，脱离 source-panel 的 overflow 裁切和滚动范围。
+document.body.appendChild(dom.presetOptions);
 initializePage();
