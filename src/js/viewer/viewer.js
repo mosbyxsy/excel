@@ -16,7 +16,7 @@ import {
   replaceStartupFilePath,
   formatBytes,
   setStatus,
-  hideLoading,
+  finishStartupLoading,
   hideCopyToast,
   getCurrentSheet,
   isRowEmpty
@@ -28,7 +28,7 @@ import {
 } from "../table-styles/table-styles.js";
 
 /* ======================================================================== */
-/* 4. 工作簿和工作表状态切换                                               */
+/* 工作簿和工作表状态切换                                                  */
 /* ======================================================================== */
 
 function resetViewState() {
@@ -43,6 +43,7 @@ function resetViewState() {
   dom.search.value = "";
   updateRawSearchControls();
   dom.viewport.scrollTop = 0;
+  // 两种视图的列结构和滚动坐标不同，切换时横向位置也必须回到起点。
   dom.viewport.scrollLeft = 0;
   dom.viewport.classList.remove("is-raw-fit");
 }
@@ -56,7 +57,6 @@ function setWorkbook(workbook, byteLength, sourcePath, autoFit) {
   resetViewState();
 
   dom.viewerCard.classList.remove("is-empty");
-  dom.empty.hidden = true;
   dom.gridFrame.hidden = false;
   dom.viewport.hidden = false;
   dom.sheetBar.hidden = false;
@@ -112,26 +112,12 @@ function enterFileSelection(message, preserveUrl) {
   state.workbook = null;
   state.sheetIndex = 0;
   state.view = "raw";
-  state.searchText = "";
-  state.rawMatches = [];
-  state.rawMatchLookup = new Map();
-  state.rawMatchIndex = -1;
-  state.sort = { column: -1, direction: null };
   state.rawFitEnabled = false;
-  state.pinnedRows.clear();
-  state.pinnedColumns.clear();
-  state.renderer = null;
-  dom.viewport.classList.remove("is-raw-fit");
-
-  dom.search.value = "";
+  resetViewState();
   dom.search.disabled = true;
-  updateRawSearchControls();
-  dom.viewport.scrollTop = 0;
-  dom.viewport.scrollLeft = 0;
   dom.gridFrame.hidden = true;
   dom.viewport.hidden = true;
   dom.sheetBar.hidden = true;
-  dom.empty.hidden = true;
   dom.header.replaceChildren();
   dom.body.replaceChildren();
   dom.rawAxisCorner.replaceChildren();
@@ -141,8 +127,9 @@ function enterFileSelection(message, preserveUrl) {
   dom.rawRowPinnedAxis.replaceChildren();
   dom.rawAxisLayer.hidden = true;
   dom.sheetTabs.replaceChildren();
+  updateSheetTabsScrollState();
   // 初始化流程使用 preserveUrl=true，此时全屏启动层必须持续到配置和默认文件处理完毕。
-  if (!preserveUrl) hideLoading();
+  if (!preserveUrl) finishStartupLoading();
   hideCopyToast();
 
   for (const button of dom.viewSwitch.querySelectorAll("button")) {
@@ -171,7 +158,6 @@ function beginFileLoad(fileName) {
   dom.sourcePanel.hidden = true;
   setSourceMessage("");
   dom.viewerCard.classList.remove("is-empty");
-  dom.empty.hidden = true;
   dom.gridFrame.hidden = true;
   dom.viewport.hidden = true;
   dom.sheetBar.hidden = true;
@@ -179,6 +165,46 @@ function beginFileLoad(fileName) {
   dom.fileMeta.textContent = "正在读取文件内容…";
   return sequence;
 }
+
+/**
+ * 同步工作表标签的横向滚动提示。
+ * 原生滚动条始终隐藏，这里只更新左右渐隐和覆盖式进度条，不改变状态栏高度。
+ */
+function updateSheetTabsScrollState() {
+  const viewportWidth = dom.sheetTabs.clientWidth;
+  const contentWidth = dom.sheetTabs.scrollWidth;
+  const maxScrollLeft = Math.max(0, contentWidth - viewportWidth);
+  const hasOverflow = !dom.sheetBar.hidden && maxScrollLeft > 1;
+  const scrollLeft = Math.min(maxScrollLeft, Math.max(0, dom.sheetTabs.scrollLeft));
+
+  dom.statusLine.classList.toggle("has-sheet-overflow", hasOverflow);
+  dom.sheetTabsShell.classList.toggle("can-scroll-left", hasOverflow && scrollLeft > 1);
+  dom.sheetTabsShell.classList.toggle("can-scroll-right", hasOverflow && scrollLeft < maxScrollLeft - 1);
+  dom.sheetScrollTrack.hidden = !hasOverflow;
+  dom.sheetScrollTrack.setAttribute(
+    "aria-valuenow",
+    String(hasOverflow && maxScrollLeft ? Math.round(scrollLeft / maxScrollLeft * 100) : 0)
+  );
+
+  if (!hasOverflow) {
+    dom.sheetScrollThumb.style.width = "";
+    dom.sheetScrollThumb.style.transform = "";
+    return;
+  }
+
+  const trackWidth = dom.sheetScrollTrack.clientWidth;
+  const thumbWidth = Math.max(28, trackWidth * viewportWidth / contentWidth);
+  const travel = Math.max(0, trackWidth - thumbWidth);
+  const progress = maxScrollLeft ? scrollLeft / maxScrollLeft : 0;
+  dom.sheetScrollThumb.style.width = `${thumbWidth}px`;
+  dom.sheetScrollThumb.style.transform = `translate3d(${travel * progress}px, 0, 0)`;
+}
+
+// 标签区域宽度会随窗口和右侧状态文字变化；ResizeObserver 负责同步覆盖式提示。
+const sheetTabsResizeObserver = typeof ResizeObserver === "function"
+  ? new ResizeObserver(updateSheetTabsScrollState)
+  : null;
+sheetTabsResizeObserver?.observe(dom.sheetTabsShell);
 
 function renderSheetTabs() {
   dom.sheetTabs.replaceChildren();
@@ -199,6 +225,8 @@ function renderSheetTabs() {
     });
     dom.sheetTabs.appendChild(button);
   });
+  // 等本轮标签完成排版后再读取宽度，避免用尚未计算的 scrollWidth 判断。
+  requestAnimationFrame(updateSheetTabsScrollState);
 }
 
 function setView(view) {
@@ -216,6 +244,10 @@ function setView(view) {
     button.classList.toggle("is-active", button.dataset.view === view);
   }
   renderCurrentSheet();
+  // 重新创建内容后再归零一次，避免浏览器的滚动锚定把旧视图的横向位置恢复回来。
+  dom.viewport.scrollTop = 0;
+  dom.viewport.scrollLeft = 0;
+  syncRawAxesScroll();
 }
 
 function renderCurrentSheet() {
@@ -249,7 +281,7 @@ function renderCurrentSheet() {
 }
 
 /* ======================================================================== */
-/* 5. 原始视图、数据视图与虚拟滚动                                         */
+/* 原始视图、数据视图与虚拟滚动                                            */
 /* ======================================================================== */
 
 /**
@@ -1099,14 +1131,15 @@ function revealRawMatch() {
     const renderer = state.renderer;
     const rowPosition = renderer.rows.findIndex((entry) => entry.sourceIndex === match.rowIndex);
     if (rowPosition >= 0) {
-      const rowTop = dom.header.offsetHeight + renderer.prefix[rowPosition];
+      // 原始视图的行号、列号已经移到滚动容器外，数据首行从 0 开始。
+      const rowTop = renderer.prefix[rowPosition];
       const rowHeight = renderer.heights[rowPosition];
       dom.viewport.scrollTop = Math.max(0, rowTop - (dom.viewport.clientHeight - rowHeight) / 2);
 
       const columnPosition = renderer.columns.indexOf(match.columnIndex);
       if (columnPosition >= 0) {
         const displayWidths = rawDisplayWidths(renderer.sheet, renderer.columns);
-        const cellLeft = ROW_NUMBER_WIDTH + displayWidths
+        const cellLeft = displayWidths
           .slice(0, columnPosition)
           .reduce((sum, width) => sum + width, 0);
         const cellWidth = displayWidths[columnPosition];
@@ -1205,6 +1238,7 @@ export {
   syncRawAxesScroll,
   revealRawMatch,
   stepRawMatch,
+  updateSheetTabsScrollState,
   // 暴露给 main.js 的事件代理使用；固定状态和重新渲染仍由视图模块集中管理。
   toggleRawAxisPin
 };

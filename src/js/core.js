@@ -4,7 +4,7 @@
  */
 
 /* ======================================================================== */
-/* 1. 常量、DOM 引用和全局状态                                             */
+/* 常量、DOM 引用和全局状态                                                */
 /* ======================================================================== */
 
 const DEFAULT_CONFIG = Object.freeze({
@@ -19,7 +19,6 @@ const SAFETY_LIMITS = Object.freeze({ rows: 100000, columns: 1000 });
 const DATA_ROW_HEIGHT = 38;
 const DEFAULT_RAW_ROW_HEIGHT = 28;
 const ROW_NUMBER_WIDTH = 42;
-const RAW_HEADER_HEIGHT = 38;
 // 预留一个物理像素，规避 table 边框与小数列宽舍入造成的 1px 横向溢出。
 const RAW_FIT_WIDTH_GUARD = 1;
 // Excel 允许的列宽上限约为 255 个字符；换算后通常不足 1800px。
@@ -37,7 +36,7 @@ const DEFAULT_PAGE_TITLE = "轻表格 · Excel / CSV 查看器";
 const suppliedConfig = window.EXCEL_VIEWER_CONFIG || {};
 const config = {
   files: Array.isArray(suppliedConfig.files) ? suppliedConfig.files : DEFAULT_CONFIG.files,
-  defaultFileId: suppliedConfig.defaultFileId || DEFAULT_CONFIG.defaultFileId,
+  defaultFileId: suppliedConfig.defaultFileId ?? DEFAULT_CONFIG.defaultFileId,
   virtualizationThreshold: clampInteger(
     suppliedConfig.virtualizationThreshold,
     50,
@@ -76,20 +75,20 @@ const dom = {
   searchPrev: document.getElementById("search-prev"),
   searchNext: document.getElementById("search-next"),
   sheetBar: document.getElementById("sheet-bar"),
+  sheetTabsShell: document.getElementById("sheet-tabs-shell"),
   sheetTabs: document.getElementById("sheet-tabs"),
+  sheetScrollTrack: document.getElementById("sheet-scroll-track"),
+  sheetScrollThumb: document.getElementById("sheet-scroll-thumb"),
   statusLine: document.getElementById("status-line"),
   statusText: document.getElementById("status-text"),
-  empty: document.getElementById("grid-empty"),
   gridFrame: document.getElementById("grid-frame"),
   viewport: document.getElementById("grid-viewport"),
   header: document.getElementById("grid-header"),
   body: document.getElementById("grid-body"),
   rawAxisLayer: document.getElementById("raw-axis-layer"),
   rawAxisCorner: document.getElementById("raw-axis-corner"),
-  rawColumnAxis: document.getElementById("raw-column-axis"),
   rawColumnAxisTrack: document.getElementById("raw-column-axis-track"),
   rawColumnPinnedAxis: document.getElementById("raw-column-pinned-axis"),
-  rawRowAxis: document.getElementById("raw-row-axis"),
   rawRowAxisTrack: document.getElementById("raw-row-axis-track"),
   rawRowPinnedAxis: document.getElementById("raw-row-pinned-axis"),
   startupLoader: document.getElementById("startup-loader"),
@@ -128,7 +127,7 @@ const state = {
 };
 
 /* ======================================================================== */
-/* 2. 通用工具函数                                                         */
+/* 通用工具函数                                                            */
 /* ======================================================================== */
 
 function clampInteger(value, min, max, fallback) {
@@ -226,8 +225,8 @@ function replaceStartupFilePath(filePath) {
 
 /**
  * 显示统一的全屏加载动画并更新阶段说明。
- * 页面准备、清单下载、工作簿下载、解析和打开都调用同一入口，避免不同阶段在
- * “全屏轨道动画”和“表格内小转圈”之间跳变。
+ * 页面准备、清单下载、工作簿下载、解析和打开都调用同一入口，保证阶段切换时
+ * 遮罩和动画保持连续。
  */
 function setStartupLoading(title, detail) {
   dom.startupLoadingTitle.textContent = title || "正在准备工作表";
@@ -236,7 +235,7 @@ function setStartupLoading(title, detail) {
   document.documentElement.classList.add("is-startup-loading");
 }
 
-/** 完成查询参数启动流程，并确保遮罩不再拦截页面操作。 */
+/** 完成当前启动或文件处理流程，并确保遮罩不再拦截页面操作。 */
 function finishStartupLoading() {
   document.documentElement.classList.remove("is-startup-loading");
   dom.startupLoader.setAttribute("aria-hidden", "true");
@@ -255,14 +254,6 @@ function setStatus(message, type) {
   dom.statusLine.classList.toggle("is-error", type === "error");
   const icon = dom.statusLine.querySelector(".status-icon");
   if (icon) icon.textContent = type === "error" ? "×" : type === "warning" ? "!" : "i";
-}
-
-function showLoading(title, detail) {
-  setStartupLoading(title || "正在读取文件", detail || "请稍候…");
-}
-
-function hideLoading() {
-  finishStartupLoading();
 }
 
 /** 在查看器底部短暂显示复制反馈，不改写右侧的工作表状态信息。 */
@@ -741,7 +732,6 @@ export {
   DATA_ROW_HEIGHT,
   DEFAULT_RAW_ROW_HEIGHT,
   ROW_NUMBER_WIDTH,
-  RAW_HEADER_HEIGHT,
   RAW_FIT_WIDTH_GUARD,
   DEFAULT_PAGE_TITLE,
   config,
@@ -757,8 +747,6 @@ export {
   finishStartupLoading,
   formatBytes,
   setStatus,
-  showLoading,
-  hideLoading,
   hideCopyToast,
   setCopyEnabled,
   copyRenderedCell,

@@ -13,6 +13,11 @@ import {
   normalizeCellStyle
 } from "../core.js";
 
+import {
+  BUILT_IN_TABLE_STYLE_PRESETS,
+  TABLE_STYLE_ELEMENT_ORDER
+} from "./built-in-table-style-presets.js";
+
 /* ======================================================================== */
 /* Excel“超级表”（Table）样式                                                */
 /* ======================================================================== */
@@ -22,457 +27,71 @@ import {
  * TableStyleLight/Medium/Dark + 编号。ExcelJS 会保留这段表模型，却不会把
  * 它自动合并到 cell.style；因此查看器需要根据表区域和样式选项自行展开。
  *
- * 下面的 7 个颜色槽对应“深色 1 + 强调色 1~6”。第一槽不是固定黑色：
- * 当工作簿替换了主题时，它也会跟随 theme1.xml 中的 dk1 变化。
+ * 60 项精确区域定义已拆到 built-in-table-style-presets.js；这里负责把其中的
+ * theme+tint 引用解析成当前工作簿颜色，并按规范顺序组合到具体单元格。
  */
-const TABLE_THEME_SLOTS = Object.freeze([
-  { name: "dark1", themeIndex: 1 },
-  { name: "accent1", themeIndex: 4 },
-  { name: "accent2", themeIndex: 5 },
-  { name: "accent3", themeIndex: 6 },
-  { name: "accent4", themeIndex: 7 },
-  { name: "accent5", themeIndex: 8 },
-  { name: "accent6", themeIndex: 9 }
-]);
-
-/** 颜色引用可指定另一主题槽，Dark 9~11 等复合色样式会用到。 */
-function tableColorReference(slot, tone) {
-  return Object.freeze({ slot, tone });
+function resolvePresetTableColor(reference, themeColors) {
+  if (!reference || !Number.isInteger(reference.theme)) return "";
+  const colors = themeColors || DEFAULT_THEME_COLORS;
+  const fallback = DEFAULT_THEME_COLORS[reference.theme] || "000000";
+  const base = normalizeHexColor(colors[reference.theme] || fallback).slice(-6);
+  const resolved = applyExcelTint(base, Number(reference.tint) || 0);
+  return resolved ? `#${resolved}` : "";
 }
-
-/** 用于规则表的边框描述；颜色在读取具体工作簿主题后才解析。 */
-function tableBorder(color, width, style) {
-  return Object.freeze({
-    color: color || "base",
-    width: width || 1,
-    style: style || "solid"
-  });
-}
-
-const WHITE_TABLE_DIVIDER = tableBorder("white", 1, "solid");
 
 /**
- * 建立 Excel 桌面端的 60 种内置超级表规则：Light 21 + Medium 28 + Dark 11。
- * 规则保存的是“主题槽 + 色阶 + 区域结构”，而不是最终 RGB，所以同一条规则
- * 能正确适配默认 Office 主题和工作簿自定义主题。
+ * Excel 边框粗细转换为浏览器边框。double 至少需要 3px，CSS 才会真正绘制
+ * 双线；medium/thick 分别映射为 2px/3px，与原始视图的缩放逻辑保持一致。
  */
-function createBuiltInTableStyleRules() {
-  const rules = {};
-  const addRule = (family, number, template) => {
-    const name = `TableStyle${family}${number}`;
-    const colorSlot = (number - 1) % 7;
-    rules[name.toLowerCase()] = Object.freeze({
-      name,
-      family: family.toLowerCase(),
-      number,
-      colorSlot,
-      rowStripeSize: 1,
-      columnStripeSize: 1,
-      firstColumnBold: true,
-      lastColumnBold: true,
-      ...template
-    });
+function resolvePresetTableBorder(value, themeColors) {
+  if (!value) return null;
+  const widthByStyle = { thin: 1, medium: 2, thick: 3, double: 3 };
+  return {
+    width: widthByStyle[value.style] || 1,
+    style: value.style === "double" ? "double" : "solid",
+    color: resolvePresetTableColor(value.color, themeColors)
   };
+}
 
-  // Light 1~7：无表头填充，表头文字使用主题基色的 25% 深色，表体隔行浅填充。
-  for (let number = 1; number <= 7; number += 1) {
-    addRule("Light", number, {
-      headerFill: "",
-      headerFont: "dark25",
-      bodyFill: "",
-      bodyFont: "textDark",
-      firstRowStripeFill: number === 1 ? "neutralLight" : "light80",
-      secondRowStripeFill: "",
-      firstColumnStripeFill: number === 1 ? "neutralLight" : "light80",
-      secondColumnStripeFill: "",
-      totalFill: "",
-      totalFont: "dark25",
-      tableTopBorder: tableBorder("base"),
-      headerBottomBorder: tableBorder("base"),
-      tableBottomBorder: tableBorder("base")
-    });
+/** 把一个 tableStyleElement 解析成可直接按区域叠加的浏览器样式。 */
+function resolvePresetTableElement(value, themeColors) {
+  if (!value) return null;
+  const result = {};
+  if (value.fill) result.fillColor = resolvePresetTableColor(value.fill, themeColors);
+  if (value.font) {
+    if (value.font.color) result.fontColor = resolvePresetTableColor(value.font.color, themeColors);
+    if (value.font.bold === true) result.bold = true;
   }
-
-  /**
-   * Light 8~14：实色表头、主题色外框和逐行分隔线。
-   * 这一组即使启用了 showRowStripes 也没有条纹填充；该开关只表示“允许应用
-   * 样式中的条纹元素”，不能反过来凭空生成浅色条纹。Light10 的原生效果
-   * 因此是橙色表头、白色表体和橙色细线，而不是浅橙色隔行背景。
-   */
-  for (let number = 8; number <= 14; number += 1) {
-    addRule("Light", number, {
-      headerFill: "base",
-      headerFont: "textLight",
-      // 表体使用 lt1 的显式填充，而不是透明背景；这样与 Excel 一样会遮住
-      // 工作表默认竖向网格线，只留下该样式声明的横向行边框。
-      bodyFill: "textLight",
-      bodyFont: "textDark",
-      firstRowStripeFill: "",
-      secondRowStripeFill: "",
-      firstColumnStripeFill: "",
-      secondColumnStripeFill: "",
-      totalFill: "textLight",
-      totalFont: "textDark",
-      tableTopBorder: tableBorder("base"),
-      headerBottomBorder: tableBorder("base"),
-      rowSeparatorBorder: tableBorder("base"),
-      tableBottomBorder: tableBorder("base"),
-      outerLeftBorder: tableBorder("base"),
-      outerRightBorder: tableBorder("base")
-    });
-  }
-
-  /**
-   * Light 15~21：无表头填充、浅色隔行，并用主题色细线完整勾勒单元格。
-   * Excel 样式库中这一组的表头底色是“无填充”，并不是 60% 浅色；此前把
-   * headerFill 写成 light60 会让整组样式看起来更像 Medium 22~28。
-   */
-  for (let number = 15; number <= 21; number += 1) {
-    addRule("Light", number, {
-      headerFill: "",
-      headerFont: "textDark",
-      bodyFill: "",
-      bodyFont: "textDark",
-      firstRowStripeFill: "light80",
-      secondRowStripeFill: "",
-      firstColumnStripeFill: "light80",
-      secondColumnStripeFill: "",
-      totalFill: "",
-      totalFont: "textDark",
-      // 统一把共享边界只落到一个单元格侧面，避免 separate 边框叠成双线。
-      tableTopBorder: tableBorder("base"),
-      headerBottomBorder: tableBorder("base"),
-      rowSeparatorBorder: tableBorder("base"),
-      columnSeparatorBorder: tableBorder("base"),
-      tableBottomBorder: tableBorder("base"),
-      outerLeftBorder: tableBorder("base"),
-      outerRightBorder: tableBorder("base")
-    });
-  }
-
-  // Medium 1~7：实色表头、白色基础行和 80% 浅色隔行。
-  for (let number = 1; number <= 7; number += 1) {
-    const isNeutralStyle = number === 1;
-    addRule("Medium", number, {
-      headerFill: "base",
-      headerFont: "textLight",
-      bodyFill: "",
-      bodyFont: "textDark",
-      firstRowStripeFill: isNeutralStyle ? "neutralLight" : "light80",
-      secondRowStripeFill: "",
-      firstColumnStripeFill: isNeutralStyle ? "neutralLight" : "light80",
-      secondColumnStripeFill: "",
-      totalFill: "base",
-      totalFont: "textLight",
-      tableTopBorder: tableBorder(isNeutralStyle ? "base" : "light40"),
-      headerBottomBorder: tableBorder(isNeutralStyle ? "base" : "light40"),
-      rowSeparatorBorder: tableBorder(isNeutralStyle ? "base" : "light40"),
-      tableBottomBorder: tableBorder(isNeutralStyle ? "base" : "light40"),
-      outerLeftBorder: tableBorder(isNeutralStyle ? "base" : "light40"),
-      outerRightBorder: tableBorder(isNeutralStyle ? "base" : "light40")
-    });
-  }
-
-  // Medium 8~14：两种数据行都着色，分别使用 60% 与 80% 浅色。
-  // 例如 Medium14 会由 accent6 得到 #70AD47/#C6E0B4/#E2EFDA。
-  for (let number = 8; number <= 14; number += 1) {
-    const isNeutralStyle = number === 8;
-    addRule("Medium", number, {
-      headerFill: "base",
-      headerFont: "textLight",
-      bodyFill: isNeutralStyle ? "neutralDark" : "light60",
-      bodyFont: "textDark",
-      firstRowStripeFill: isNeutralStyle ? "neutralDark" : "light60",
-      secondRowStripeFill: isNeutralStyle ? "neutralLight" : "light80",
-      firstColumnStripeFill: isNeutralStyle ? "neutralDark" : "light60",
-      secondColumnStripeFill: isNeutralStyle ? "neutralLight" : "light80",
-      totalFill: "base",
-      totalFont: "textLight",
-      headerBottomBorder: tableBorder("white", 3),
-      rowSeparatorBorder: WHITE_TABLE_DIVIDER,
-      columnSeparatorBorder: WHITE_TABLE_DIVIDER
-    });
-  }
-
-  // Medium 15~21：主题色表头配中性灰条纹，并以黑色粗线封闭表头和表尾。
-  for (let number = 15; number <= 21; number += 1) {
-    const isNeutralStyle = number === 15;
-    addRule("Medium", number, {
-      headerFill: "base",
-      headerFont: "textLight",
-      bodyFill: "",
-      bodyFont: "textDark",
-      firstRowStripeFill: "neutralLight",
-      secondRowStripeFill: "",
-      firstColumnStripeFill: "neutralLight",
-      secondColumnStripeFill: "",
-      totalFill: "",
-      totalFont: "textDark",
-      tableTopBorder: tableBorder("textDark", 2),
-      headerBottomBorder: tableBorder("textDark", 2),
-      rowSeparatorBorder: isNeutralStyle ? tableBorder("textDark") : null,
-      columnSeparatorBorder: isNeutralStyle ? tableBorder("textDark") : null,
-      tableBottomBorder: tableBorder("textDark", 2),
-      outerLeftBorder: isNeutralStyle ? tableBorder("textDark") : null,
-      outerRightBorder: isNeutralStyle ? tableBorder("textDark") : null
-    });
-  }
-
-  // Medium 22~28：浅色表头配双层浅色表体，并在每个行列边界绘制主题色细线。
-  for (let number = 22; number <= 28; number += 1) {
-    const isNeutralStyle = number === 22;
-    const headerFill = isNeutralStyle ? "neutralLight" : "light80";
-    const strongBodyFill = isNeutralStyle ? "neutralDark" : "light60";
-    const lightBodyFill = isNeutralStyle ? "neutralLight" : "light80";
-    const ruleColor = isNeutralStyle ? "textDark" : "light40";
-    addRule("Medium", number, {
-      headerFill,
-      headerFont: "textDark",
-      bodyFill: strongBodyFill,
-      bodyFont: "textDark",
-      firstRowStripeFill: strongBodyFill,
-      secondRowStripeFill: lightBodyFill,
-      firstColumnStripeFill: strongBodyFill,
-      secondColumnStripeFill: lightBodyFill,
-      totalFill: headerFill,
-      totalFont: "textDark",
-      tableTopBorder: tableBorder(ruleColor),
-      headerBottomBorder: tableBorder(ruleColor),
-      rowSeparatorBorder: tableBorder(ruleColor),
-      columnSeparatorBorder: tableBorder(ruleColor),
-      tableBottomBorder: tableBorder(ruleColor),
-      outerLeftBorder: tableBorder(ruleColor),
-      outerRightBorder: tableBorder(ruleColor)
-    });
-  }
-
-  /**
-   * Dark 1~7：表头统一使用主题“深色 1”，而不是各强调色再压暗 50%。
-   * Dark 2~7 的第一条纹是强调色的 25% 深色，第二条纹才是强调色本身；
-   * Dark 1 没有可继续压暗的黑色，因此使用黑色向白色提升 25%/45% 得到
-   * Excel 默认主题中的 #404040/#737373。
-   *
-   * Excel 的 Dark 系列表体只依靠深浅填充区分数据行，既没有横向网格线，
-   * 也没有纵向网格线。仅表头底部和汇总行顶部需要与表体形成边界。
-   * 工作表默认网格线也会被深色填充遮住，因此 bodyBorders 必须完全省略；
-   * 否则表体会出现 Excel 原表中不存在的白色横线或竖线。
-   */
-  for (let number = 1; number <= 7; number += 1) {
-    const isNeutralStyle = number === 1;
-    addRule("Dark", number, {
-      headerFill: "textDark",
-      headerFont: "textLight",
-      headerBorders: { bottom: WHITE_TABLE_DIVIDER },
-      bodyFill: isNeutralStyle ? "light45" : "base",
-      bodyFont: "textLight",
-      firstRowStripeFill: isNeutralStyle ? "light25" : "dark25",
-      secondRowStripeFill: isNeutralStyle ? "light45" : "base",
-      firstColumnStripeFill: isNeutralStyle ? "light25" : "dark25",
-      secondColumnStripeFill: isNeutralStyle ? "light45" : "base",
-      totalFill: "textDark",
-      totalFont: "textLight",
-      totalBorders: { top: WHITE_TABLE_DIVIDER }
-    });
-  }
-
-  // Dark 8~11 是 Excel 图库中的复合色样式，不能用编号取模简单推导。
-  const darkCompositeRules = [
-    {
-      number: 8,
-      colorSlot: 0,
-      headerFill: tableColorReference(0, "base"),
-      bodyFill: "neutralDark",
-      stripeFill: "neutralLight",
-      bodyFont: "textDark"
-    },
-    {
-      number: 9,
-      colorSlot: 2,
-      headerFill: tableColorReference(2, "base"),
-      bodyFill: tableColorReference(1, "light60"),
-      stripeFill: tableColorReference(1, "light80"),
-      bodyFont: "textDark"
-    },
-    {
-      number: 10,
-      colorSlot: 4,
-      headerFill: tableColorReference(4, "base"),
-      bodyFill: tableColorReference(3, "light60"),
-      stripeFill: tableColorReference(3, "light80"),
-      bodyFont: "textDark"
-    },
-    {
-      number: 11,
-      colorSlot: 6,
-      headerFill: tableColorReference(6, "base"),
-      bodyFill: tableColorReference(5, "light60"),
-      stripeFill: tableColorReference(5, "light80"),
-      bodyFont: "textDark"
-    }
-  ];
-  for (const composite of darkCompositeRules) {
-    addRule("Dark", composite.number, {
-      colorSlot: composite.colorSlot,
-      headerFill: composite.headerFill,
-      headerFont: "textLight",
-      headerBorders: { bottom: WHITE_TABLE_DIVIDER },
-      bodyFill: composite.bodyFill,
-      bodyFont: composite.bodyFont,
-      firstRowStripeFill: composite.bodyFill,
-      secondRowStripeFill: composite.stripeFill,
-      firstColumnStripeFill: composite.bodyFill,
-      secondColumnStripeFill: composite.stripeFill,
-      totalFill: composite.headerFill,
-      totalFont: "textLight",
-      totalBorders: { top: WHITE_TABLE_DIVIDER }
-    });
-  }
-
-  /**
-   * 除了检查总数，还逐项检查合法名称。只检查 60 这个数字无法发现“漏掉一个、
-   * 又重复写入另一个”的问题；逐项校验能保证 Excel 的每个内置名称都可命中。
-   */
-  const expectedFamilies = [
-    ["Light", 21],
-    ["Medium", 28],
-    ["Dark", 11]
-  ];
-  for (const [family, lastNumber] of expectedFamilies) {
-    for (let number = 1; number <= lastNumber; number += 1) {
-      const expectedName = `TableStyle${family}${number}`;
-      const rule = rules[expectedName.toLowerCase()];
-      if (!rule || rule.name !== expectedName) {
-        throw new Error(`缺少内置超级表样式规则：${expectedName}`);
+  if (value.borders) {
+    result.borders = {};
+    for (const side of ["top", "right", "bottom", "left", "vertical", "horizontal"]) {
+      if (value.borders[side]) {
+        result.borders[side] = resolvePresetTableBorder(value.borders[side], themeColors);
       }
     }
-  }
-  if (Object.keys(rules).length !== 60) {
-    throw new Error("内置超级表样式规则必须且只能包含 60 项。");
-  }
-  return Object.freeze(rules);
-}
-
-const BUILT_IN_TABLE_STYLE_RULES = createBuiltInTableStyleRules();
-
-/** 按颜色槽取得当前工作簿的主题基色。 */
-function tableThemeBaseColor(themeColors, colorSlot) {
-  const safeSlot = clamp(Number(colorSlot) || 0, 0, TABLE_THEME_SLOTS.length - 1);
-  const themeSlot = TABLE_THEME_SLOTS[safeSlot];
-  return (themeColors || DEFAULT_THEME_COLORS)[themeSlot.themeIndex]
-    || DEFAULT_THEME_COLORS[themeSlot.themeIndex];
-}
-
-/**
- * 将规则中的色阶引用转换为 CSS 颜色。默认主题和自定义主题都从当前文件
- * 的 theme1.xml 取色，再走同一套 Excel tint 算法，不使用固定配色覆盖文件。
- */
-function resolveBuiltInTableColor(reference, themeColors, defaultColorSlot) {
-  if (!reference) return "";
-  if (typeof reference === "string" && reference.startsWith("#")) return reference;
-  if (reference === "white" || reference === "textLight") {
-    const light = (themeColors || DEFAULT_THEME_COLORS)[0] || "FFFFFF";
-    return `#${normalizeHexColor(light).slice(-6) || "FFFFFF"}`;
-  }
-  if (reference === "black" || reference === "textDark") {
-    const dark = (themeColors || DEFAULT_THEME_COLORS)[1] || "000000";
-    return `#${normalizeHexColor(dark).slice(-6) || "000000"}`;
-  }
-  if (reference === "neutralLight" || reference === "neutralDark") {
-    // 内置样式的中性条纹来自 lt1 向黑色压暗 15%/35%，并不是 accent3 灰色。
-    const lightBase = normalizeHexColor(
-      (themeColors || DEFAULT_THEME_COLORS)[0] || "FFFFFF"
-    ).slice(-6);
-    return `#${applyExcelTint(lightBase, reference === "neutralLight" ? -0.15 : -0.35)}`;
-  }
-
-  const colorSlot = typeof reference === "object" && Number.isInteger(reference.slot)
-    ? reference.slot
-    : defaultColorSlot;
-  const tone = typeof reference === "object" ? reference.tone : reference;
-  const baseColor = normalizeHexColor(tableThemeBaseColor(themeColors, colorSlot)).slice(-6);
-  const tintByTone = {
-    base: 0,
-    light20: 0.2,
-    light25: 0.25,
-    light40: 0.4,
-    light45: 0.45,
-    light60: 0.6,
-    light80: 0.8,
-    dark25: -0.25,
-    dark50: -0.5
-  };
-  const tint = tintByTone[tone];
-  const color = applyExcelTint(baseColor, Number.isFinite(tint) ? tint : 0);
-  return color ? `#${color}` : "";
-}
-
-/** 将规则边框中的主题色引用转换为 applyCellStyle 可直接使用的边框。 */
-function resolveBuiltInTableBorders(borders, themeColors, defaultColorSlot) {
-  if (!borders) return null;
-  const result = { top: null, right: null, bottom: null, left: null };
-  for (const side of ["top", "right", "bottom", "left"]) {
-    const border = borders[side];
-    if (!border) continue;
-    result[side] = {
-      width: border.width || 1,
-      style: border.style || "solid",
-      color: resolveBuiltInTableColor(border.color || "base", themeColors, defaultColorSlot)
-    };
   }
   return result;
 }
 
-/** 解析一个用于表格外框或内部边界的单独边框。 */
-function resolveBuiltInTableBorder(border, themeColors, defaultColorSlot) {
-  if (!border) return null;
-  return {
-    width: border.width || 1,
-    style: border.style || "solid",
-    color: resolveBuiltInTableColor(border.color || "base", themeColors, defaultColorSlot)
-  };
-}
-
-/** 把 60 项规则中的主题引用展开成当前工作簿对应的实际配色方案。 */
+/**
+ * 把精确的 60 项预设展开为当前工作簿主题色。palette 保留“区域元素”结构，
+ * 渲染时才能正确处理行列条纹交叉、首末列填充和汇总行的继承关系。
+ */
 function createBuiltInTablePalette(styleName, themeColors) {
-  const rule = BUILT_IN_TABLE_STYLE_RULES[String(styleName || "").toLowerCase()];
-  if (!rule) return null;
-  const color = (reference) => resolveBuiltInTableColor(reference, themeColors, rule.colorSlot);
-  const borders = (value) => resolveBuiltInTableBorders(value, themeColors, rule.colorSlot);
+  const preset = BUILT_IN_TABLE_STYLE_PRESETS[String(styleName || "").toLowerCase()];
+  if (!preset) return null;
+  const elements = {};
+  for (const type of TABLE_STYLE_ELEMENT_ORDER) {
+    if (preset.elements[type]) {
+      elements[type] = resolvePresetTableElement(preset.elements[type], themeColors);
+    }
+  }
   return {
-    family: rule.family,
-    styleName: rule.name,
-    bodyFill: color(rule.bodyFill),
-    bodyFont: color(rule.bodyFont),
-    bodyBorders: borders(rule.bodyBorders),
-    headerFill: color(rule.headerFill),
-    headerFont: color(rule.headerFont),
-    headerBorders: borders(rule.headerBorders),
-    totalFill: color(rule.totalFill),
-    totalFont: color(rule.totalFont),
-    totalBorders: borders(rule.totalBorders),
-    firstRowStripeFill: color(rule.firstRowStripeFill),
-    firstRowStripeFont: color(rule.firstRowStripeFont),
-    firstRowStripeBorders: borders(rule.firstRowStripeBorders),
-    secondRowStripeFill: color(rule.secondRowStripeFill),
-    secondRowStripeFont: color(rule.secondRowStripeFont),
-    secondRowStripeBorders: borders(rule.secondRowStripeBorders),
-    firstColumnStripeFill: color(rule.firstColumnStripeFill),
-    firstColumnStripeFont: color(rule.firstColumnStripeFont),
-    firstColumnStripeBorders: borders(rule.firstColumnStripeBorders),
-    secondColumnStripeFill: color(rule.secondColumnStripeFill),
-    secondColumnStripeFont: color(rule.secondColumnStripeFont),
-    secondColumnStripeBorders: borders(rule.secondColumnStripeBorders),
-    tableTopBorder: resolveBuiltInTableBorder(rule.tableTopBorder, themeColors, rule.colorSlot),
-    headerBottomBorder: resolveBuiltInTableBorder(rule.headerBottomBorder, themeColors, rule.colorSlot),
-    rowSeparatorBorder: resolveBuiltInTableBorder(rule.rowSeparatorBorder, themeColors, rule.colorSlot),
-    columnSeparatorBorder: resolveBuiltInTableBorder(rule.columnSeparatorBorder, themeColors, rule.colorSlot),
-    tableBottomBorder: resolveBuiltInTableBorder(rule.tableBottomBorder, themeColors, rule.colorSlot),
-    outerLeftBorder: resolveBuiltInTableBorder(rule.outerLeftBorder, themeColors, rule.colorSlot),
-    outerRightBorder: resolveBuiltInTableBorder(rule.outerRightBorder, themeColors, rule.colorSlot),
-    rowStripeSize: rule.rowStripeSize || 1,
-    columnStripeSize: rule.columnStripeSize || 1,
-    firstColumnBold: rule.firstColumnBold !== false,
-    lastColumnBold: rule.lastColumnBold !== false
+    family: preset.family,
+    styleName: preset.name,
+    elements,
+    rowStripeSize: preset.rowStripeSize || 1,
+    columnStripeSize: preset.columnStripeSize || 1
   };
 }
 
@@ -481,38 +100,9 @@ function createEmptyTablePalette() {
   return {
     family: "custom",
     styleName: "",
-    bodyFill: "",
-    bodyFont: "",
-    bodyBorders: null,
-    headerFill: "",
-    headerFont: "",
-    headerBorders: null,
-    totalFill: "",
-    totalFont: "",
-    totalBorders: null,
-    firstRowStripeFill: "",
-    firstRowStripeFont: "",
-    firstRowStripeBorders: null,
-    secondRowStripeFill: "",
-    secondRowStripeFont: "",
-    secondRowStripeBorders: null,
-    firstColumnStripeFill: "",
-    firstColumnStripeFont: "",
-    firstColumnStripeBorders: null,
-    secondColumnStripeFill: "",
-    secondColumnStripeFont: "",
-    secondColumnStripeBorders: null,
-    tableTopBorder: null,
-    headerBottomBorder: null,
-    rowSeparatorBorder: null,
-    columnSeparatorBorder: null,
-    tableBottomBorder: null,
-    outerLeftBorder: null,
-    outerRightBorder: null,
+    elements: {},
     rowStripeSize: 1,
-    columnStripeSize: 1,
-    firstColumnBold: true,
-    lastColumnBold: true
+    columnStripeSize: 1
   };
 }
 
@@ -759,7 +349,70 @@ function extractWorksheetTableStyles(worksheet, themeColors, warnings, ooxmlTabl
   }).filter((table) => table && table.palette);
 }
 
-/** 根据行列位置计算某个单元格应继承的超级表视觉样式。 */
+/**
+ * 返回指定偏移所在的条纹区域。第一、第二条纹可以拥有不同宽度；内置样式
+ * 当前均为 1，但保留完整算法可兼容未来从自定义 tableStyleElement 读取 size。
+ */
+function tableStripeRegion(index, start, end, firstSize, secondSize) {
+  if (index < start || index > end) return null;
+  const safeFirstSize = Math.max(1, Number(firstSize) || 1);
+  const safeSecondSize = Math.max(1, Number(secondSize) || 1);
+  const cycleSize = safeFirstSize + safeSecondSize;
+  const cycleStart = start + Math.floor((index - start) / cycleSize) * cycleSize;
+  const secondStart = Math.min(end + 1, cycleStart + safeFirstSize);
+  if (index < secondStart) {
+    return {
+      type: "first",
+      start: cycleStart,
+      end: Math.min(end, secondStart - 1)
+    };
+  }
+  return {
+    type: "second",
+    start: secondStart,
+    end: Math.min(end, secondStart + safeSecondSize - 1)
+  };
+}
+
+/** 建立空白边框容器；内部还会使用 vertical/horizontal，最终只输出四个物理边。 */
+function emptyPhysicalBorders() {
+  return { top: null, right: null, bottom: null, left: null };
+}
+
+/**
+ * 将一个区域元素叠加到单元格。区域边框必须按范围解释：left/right/top/bottom
+ * 只作用于区域外沿，vertical/horizontal 则作用于区域内部共享边界。
+ */
+function applyTableElementToCell(result, elementStyle, region, rowIndex, columnIndex) {
+  if (!elementStyle || !region) return;
+  if (elementStyle.fillColor) result.fillColor = elementStyle.fillColor;
+  if (elementStyle.fontColor) result.fontColor = elementStyle.fontColor;
+  if (elementStyle.bold === true) result.bold = true;
+
+  const elementBorders = elementStyle.borders;
+  if (!elementBorders) return;
+  if (!result.borders) result.borders = emptyPhysicalBorders();
+  const setBorder = (side, value, keepLeadingBorder) => {
+    if (!value) return;
+    result.borders[side] = value;
+    if (keepLeadingBorder && side === "top") result.keepTopBorder = true;
+    if (keepLeadingBorder && side === "left") result.keepLeftBorder = true;
+  };
+
+  if (rowIndex === region.startRow) setBorder("top", elementBorders.top, true);
+  if (rowIndex === region.endRow) setBorder("bottom", elementBorders.bottom, false);
+  if (columnIndex === region.startCol) setBorder("left", elementBorders.left, true);
+  if (columnIndex === region.endCol) setBorder("right", elementBorders.right, false);
+  if (columnIndex < region.endCol) setBorder("right", elementBorders.vertical, false);
+  if (rowIndex < region.endRow) setBorder("bottom", elementBorders.horizontal, false);
+}
+
+/**
+ * 根据 OOXML 的规范顺序计算单元格最终超级表样式：
+ * wholeTable → 列条纹 → 行条纹 → 末列 → 首列 → 表头 → 汇总行。
+ * 后应用的元素只覆盖自己显式声明的属性，因此行列条纹交叉处不会误清空颜色，
+ * 首末列也能正确得到 Excel 预设中的填充、字体和分隔边框，而不只是加粗。
+ */
 function getTableCellStyle(tables, rowIndex, columnIndex) {
   const table = tables.find((candidate) => (
     rowIndex >= candidate.range.startRow && rowIndex <= candidate.range.endRow
@@ -768,99 +421,107 @@ function getTableCellStyle(tables, rowIndex, columnIndex) {
   if (!table) return null;
 
   const { range, palette } = table;
-  const isHeader = table.headerRow && rowIndex === range.startRow;
-  const isTotal = table.totalsRow && rowIndex === range.endRow;
+  const elements = palette.elements || {};
+  const result = {
+    fillColor: "",
+    fontColor: "",
+    bold: false,
+    keepTopBorder: false,
+    keepLeftBorder: false,
+    borders: null
+  };
+  const wholeRange = { ...range };
+
+  /*
+   * 镶边行和镶边列只属于超级表的数据正文，不包含表头和汇总行。
+   * 之前把 range.endRow 直接作为条纹终点，当汇总行前的数据行数量恰好落在
+   * 第一条纹周期时，未声明独立填充的 totalRow 会错误继承条纹背景；同时
+   * 列条纹也会让汇总行出现交替底色。先算出真正的数据区，后续两种条纹
+   * 共用这段范围，才能与 Excel 的 DataBodyRange 表现一致。
+   */
   const bodyStart = range.startRow + (table.headerRow ? 1 : 0);
   const bodyEnd = range.endRow - (table.totalsRow ? 1 : 0);
-  const isBody = rowIndex >= bodyStart && rowIndex <= bodyEnd;
+  const hasBody = bodyStart <= bodyEnd;
 
-  let fillColor = "";
-  let fontColor = "";
-  let borders = null;
-  let keepTopBorder = false;
-  let keepLeftBorder = false;
-  let bold = false;
+  // 1. wholeTable 为全部后续区域提供基础字体、填充和外框/内部网格。
+  applyTableElementToCell(result, elements.wholeTable, wholeRange, rowIndex, columnIndex);
+
+  // 2. 列条纹按数据列循环，但只绘制在数据正文的行范围内。
+  if (table.showColumnStripes && hasBody && rowIndex >= bodyStart && rowIndex <= bodyEnd) {
+    const stripe = tableStripeRegion(
+      columnIndex,
+      range.startCol,
+      range.endCol,
+      palette.columnStripeSize,
+      palette.columnStripeSize
+    );
+    if (stripe) {
+      const type = stripe.type === "first" ? "firstColumnStripe" : "secondColumnStripe";
+      applyTableElementToCell(result, elements[type], {
+        startRow: bodyStart,
+        endRow: bodyEnd,
+        startCol: stripe.start,
+        endCol: stripe.end
+      }, rowIndex, columnIndex);
+    }
+  }
+
+  // 3. 行条纹只在数据正文内循环；规范顺序晚于列条纹，所以显式属性优先。
+  if (table.showRowStripes && hasBody && rowIndex >= bodyStart && rowIndex <= bodyEnd) {
+    const stripe = tableStripeRegion(
+      rowIndex,
+      bodyStart,
+      bodyEnd,
+      palette.rowStripeSize,
+      palette.rowStripeSize
+    );
+    if (stripe) {
+      const type = stripe.type === "first" ? "firstRowStripe" : "secondRowStripe";
+      applyTableElementToCell(result, elements[type], {
+        startRow: stripe.start,
+        endRow: stripe.end,
+        startCol: range.startCol,
+        endCol: range.endCol
+      }, rowIndex, columnIndex);
+    }
+  }
+
+  // 4~5. Excel 规定末列先于首列；虽然二者不会在正常表格中重叠，仍保持规范顺序。
+  if (table.showLastColumn && columnIndex === range.endCol) {
+    applyTableElementToCell(result, elements.lastColumn, {
+      startRow: range.startRow,
+      endRow: range.endRow,
+      startCol: range.endCol,
+      endCol: range.endCol
+    }, rowIndex, columnIndex);
+  }
+  if (table.showFirstColumn && columnIndex === range.startCol) {
+    applyTableElementToCell(result, elements.firstColumn, {
+      startRow: range.startRow,
+      endRow: range.endRow,
+      startCol: range.startCol,
+      endCol: range.startCol
+    }, rowIndex, columnIndex);
+  }
+
+  // 6~7. 表头和汇总行最后应用，确保不会被条纹或首末列样式错误覆盖。
+  const isHeader = table.headerRow && rowIndex === range.startRow;
+  const isTotal = table.totalsRow && rowIndex === range.endRow;
   if (isHeader) {
-    fillColor = palette.headerFill;
-    fontColor = palette.headerFont;
-    borders = palette.headerBorders;
-    bold = true;
-  } else if (isTotal) {
-    fillColor = palette.totalFill;
-    fontColor = palette.totalFont;
-    borders = palette.totalBorders;
-    bold = true;
-  } else if (isBody) {
-    fillColor = palette.bodyFill;
-    fontColor = palette.bodyFont;
-    borders = palette.bodyBorders;
-    const rowOffset = rowIndex - bodyStart;
-    const columnOffset = columnIndex - range.startCol;
-
-    /**
-     * 条纹宽度虽然内置样式目前都是 1，但这里仍按 OOXML 的 size 语义计算，
-     * 以后接入自定义 tableStyleElement 时无需重写渲染逻辑。
-     */
-    const stripePart = (offset, firstSize, secondSize) => {
-      const safeFirstSize = Math.max(1, Number(firstSize) || 1);
-      const safeSecondSize = Math.max(1, Number(secondSize) || 1);
-      return offset % (safeFirstSize + safeSecondSize) < safeFirstSize ? "first" : "second";
-    };
-    const applyStripe = (kind, axis) => {
-      const prefix = `${kind}${axis}Stripe`;
-      if (palette[`${prefix}Fill`]) fillColor = palette[`${prefix}Fill`];
-      if (palette[`${prefix}Font`]) fontColor = palette[`${prefix}Font`];
-      if (palette[`${prefix}Borders`]) borders = palette[`${prefix}Borders`];
-    };
-
-    /**
-     * OOXML 规定先应用奇/偶行条纹，再应用奇/偶列条纹；后应用的列条纹在
-     * 交叉单元格中拥有更高优先级。这里只让条纹实际声明的属性覆盖前一层，
-     * 空的 fill/font/border 表示“不覆盖”，不能误清除整表基础样式。
-     */
-    if (table.showRowStripes) {
-      applyStripe(
-        stripePart(rowOffset, palette.rowStripeSize, palette.rowStripeSize),
-        "Row"
-      );
-    }
-    if (table.showColumnStripes) {
-      applyStripe(
-        stripePart(columnOffset, palette.columnStripeSize, palette.columnStripeSize),
-        "Column"
-      );
-    }
+    applyTableElementToCell(result, elements.headerRow, {
+      startRow: range.startRow,
+      endRow: range.startRow,
+      startCol: range.startCol,
+      endCol: range.endCol
+    }, rowIndex, columnIndex);
   }
-
-  /**
-   * 外框和内部边界必须根据当前单元格的位置落到正确一侧。若把同一组边框
-   * 无条件套给每格，就会在表格右侧/底部多画线，并产生粗细不一的双边框。
-   */
-  const setBorder = (side, border) => {
-    if (!border) return;
-    if (!borders) borders = { top: null, right: null, bottom: null, left: null };
-    borders = { ...borders, [side]: border };
-  };
-  if (rowIndex === range.startRow && palette.tableTopBorder) {
-    setBorder("top", palette.tableTopBorder);
-    keepTopBorder = true;
-  }
-  if (isHeader) setBorder("bottom", palette.headerBottomBorder);
-  if (isBody && rowIndex < bodyEnd) setBorder("bottom", palette.rowSeparatorBorder);
-  // 原始视图用前一格的 right 表示共享竖线，避免 separate 边框叠成双线。
-  if (columnIndex < range.endCol) setBorder("right", palette.columnSeparatorBorder);
-  if (rowIndex === range.endRow) setBorder("bottom", palette.tableBottomBorder);
-  if (columnIndex === range.startCol && palette.outerLeftBorder) {
-    setBorder("left", palette.outerLeftBorder);
-    keepLeftBorder = true;
-  }
-  if (columnIndex === range.endCol) setBorder("right", palette.outerRightBorder);
-
-  if (table.showFirstColumn && columnIndex === range.startCol && palette.firstColumnBold) {
-    bold = true;
-  }
-  if (table.showLastColumn && columnIndex === range.endCol && palette.lastColumnBold) {
-    bold = true;
+  if (isTotal) {
+    applyTableElementToCell(result, elements.totalRow, {
+      startRow: range.endRow,
+      endRow: range.endRow,
+      startCol: range.startCol,
+      endCol: range.endCol
+    }, rowIndex, columnIndex);
   }
 
   const columnStyle = table.columnStyles[columnIndex - range.startCol] || null;
@@ -868,24 +529,9 @@ function getTableCellStyle(tables, rowIndex, columnIndex) {
     ? table.headerStyle
     : isTotal
       ? table.totalsStyle
-      : isBody
-        ? columnStyle || table.dataStyle
-        : null;
-  const result = {
-    fillColor,
-    fontColor,
-    bold,
-    keepTopBorder,
-    keepLeftBorder,
-    // 内置超级表的分隔线也属于样式；单元格自身边框仍会在合并阶段优先。
-    borders
-  };
+      : columnStyle || table.dataStyle;
   if (differentialStyle) {
-    // dxf 是表头、汇总行、整段数据或特定表列的显式差异格式，作用域已经
-    // 由 table/column 元数据确定；因此只覆盖其所属区域，不能扩散到整张表。
-    if (differentialStyle.fillColor) {
-      result.fillColor = differentialStyle.fillColor;
-    }
+    if (differentialStyle.fillColor) result.fillColor = differentialStyle.fillColor;
     if (differentialStyle.fontColor) result.fontColor = differentialStyle.fontColor;
     if (differentialStyle.bold) result.bold = true;
     for (const key of [
@@ -895,15 +541,9 @@ function getTableCellStyle(tables, rowIndex, columnIndex) {
       if (differentialStyle[key]) result[key] = differentialStyle[key];
     }
     if (differentialStyle.borders) {
-      // normalizeCellStyle 即使未声明边框也会返回四个 null 槽位；因此不能
-      // 整体替换内置样式边框，只让 dxf 中真正存在的边覆盖对应一侧。
-      result.borders = result.borders
-        ? { ...result.borders }
-        : { top: null, right: null, bottom: null, left: null };
+      if (!result.borders) result.borders = emptyPhysicalBorders();
       for (const side of ["top", "right", "bottom", "left"]) {
-        if (differentialStyle.borders[side]) {
-          result.borders[side] = differentialStyle.borders[side];
-        }
+        if (differentialStyle.borders[side]) result.borders[side] = differentialStyle.borders[side];
       }
     }
   }
@@ -911,12 +551,8 @@ function getTableCellStyle(tables, rowIndex, columnIndex) {
 }
 
 /**
- * 启动时对 Excel 的 60 种内置超级表样式做结构化回归。
- *
- * 这不是只检查“规则数量等于 60”：每一项都会实际创建一个 5 行 3 列的
- * 虚拟超级表，再分别读取表头、奇偶数据行、内部分隔线、外框和汇总行。
- * 一旦以后调整配色或边框时破坏了某个样式族，页面会立即抛出包含样式名的
- * 中文错误，而不会悄悄把错误颜色展示给用户。
+ * 对精确预设做启动回归。测试同时覆盖“超级表测试.xlsx”使用的六种开关组合：
+ * 无条纹、行条纹、行列条纹、首列、末列和汇总行，避免只验证一种默认外观。
  */
 function verifyBuiltInTableStyleRegression() {
   const fail = (styleName, message) => {
@@ -925,8 +561,8 @@ function verifyBuiltInTableStyleRegression() {
   const assert = (condition, styleName, message) => {
     if (!condition) fail(styleName, message);
   };
-  const isCssColor = (value) => !value || /^#[0-9A-F]{6}$/i.test(value)
-    || /^rgba\(/i.test(value);
+  const isCssColor = (value) => !value || /^#[0-9A-F]{6}$/i.test(value);
+  const families = [["Light", 21], ["Medium", 28], ["Dark", 11]];
   const makeTable = (styleName, options) => ({
     range: { startRow: 0, endRow: 4, startCol: 0, endCol: 2 },
     palette: createBuiltInTablePalette(styleName, DEFAULT_THEME_COLORS),
@@ -942,235 +578,176 @@ function verifyBuiltInTableStyleRegression() {
     columnStyles: [],
     ...(options || {})
   });
-  const styleAt = (table, row, column) => getTableCellStyle([table], row, column);
+  const at = (table, row, column) => getTableCellStyle([table], row, column);
   const borderAt = (style, side) => style && style.borders && style.borders[side];
-  const expectBorder = (styleName, style, side, message, width) => {
-    const border = borderAt(style, side);
-    assert(Boolean(border), styleName, message);
-    if (width) assert(border.width === width, styleName, `${message}应为 ${width}px`);
-    assert(isCssColor(border.color), styleName, `${message}颜色无效`);
+  const expectColor = (actual, expected, styleName, message) => {
+    assert(actual === expected, styleName, `${message}应为 ${expected}，实际为 ${actual || "无"}`);
   };
-  const expectNoBorder = (styleName, style, side, message) => {
-    assert(!borderAt(style, side), styleName, message);
+  const expectBorder = (style, side, expected, styleName, message) => {
+    const actual = borderAt(style, side);
+    assert(Boolean(actual), styleName, `${message}缺失`);
+    if (expected.width) assert(actual.width === expected.width, styleName, `${message}粗细错误`);
+    if (expected.style) assert(actual.style === expected.style, styleName, `${message}线型错误`);
+    if (expected.color) expectColor(actual.color, expected.color, styleName, `${message}颜色`);
   };
 
-  const families = [
-    ["Light", 21],
-    ["Medium", 28],
-    ["Dark", 11]
-  ];
   let checkedStyles = 0;
-
-  for (const [family, lastNumber] of families) {
-    for (let number = 1; number <= lastNumber; number += 1) {
+  for (const [family, count] of families) {
+    for (let number = 1; number <= count; number += 1) {
       const styleName = `TableStyle${family}${number}`;
-      const table = makeTable(styleName);
-      const palette = table.palette;
-      assert(Boolean(palette), styleName, "无法生成主题色方案");
-      assert(palette.styleName === styleName, styleName, "样式名称映射错误");
+      const palette = createBuiltInTablePalette(styleName, DEFAULT_THEME_COLORS);
+      assert(Boolean(palette), styleName, "无法建立样式方案");
+      assert(palette.styleName === styleName, styleName, "名称映射错误");
+      assert(Boolean(palette.elements.wholeTable), styleName, "缺少 wholeTable 元素");
 
-      // 所有颜色必须已经从“主题槽 + tint”解析为浏览器可安全应用的 CSS 颜色。
-      for (const [key, value] of Object.entries(palette)) {
-        if ((key.endsWith("Fill") || key.endsWith("Font")) && typeof value === "string") {
-          assert(isCssColor(value), styleName, `${key} 不是合法颜色`);
-        }
-        if (key.endsWith("Border") && value) {
-          assert(value.width >= 1 && Boolean(value.style), styleName, `${key} 边框描述不完整`);
-          assert(isCssColor(value.color), styleName, `${key} 边框颜色无效`);
-        }
-        if (key.endsWith("Borders") && value) {
-          for (const [side, border] of Object.entries(value)) {
-            if (!border) continue;
-            assert(border.width >= 1 && Boolean(border.style), styleName, `${key}.${side} 描述不完整`);
-            assert(isCssColor(border.color), styleName, `${key}.${side} 颜色无效`);
-          }
+      for (const elementStyle of Object.values(palette.elements)) {
+        if (elementStyle.fillColor) assert(isCssColor(elementStyle.fillColor), styleName, "填充色无效");
+        if (elementStyle.fontColor) assert(isCssColor(elementStyle.fontColor), styleName, "字体色无效");
+        for (const value of Object.values(elementStyle.borders || {})) {
+          assert(value.width >= 1 && Boolean(value.style), styleName, "边框描述不完整");
+          assert(isCssColor(value.color), styleName, "边框颜色无效");
         }
       }
 
-      const headerLeft = styleAt(table, 0, 0);
-      const headerMiddle = styleAt(table, 0, 1);
-      const firstBody = styleAt(table, 1, 1);
-      const secondBody = styleAt(table, 2, 1);
-      const lastBody = styleAt(table, 4, 1);
-      assert(headerMiddle.bold, styleName, "表头必须加粗");
-      assert(
-        firstBody.fillColor === (palette.firstRowStripeFill || palette.bodyFill),
-        styleName,
-        "第一行条纹填充错误"
-      );
-      assert(secondBody.fillColor === (palette.secondRowStripeFill || palette.bodyFill), styleName, "第二行条纹填充错误");
-
-      // 有填充的表格区域必须遮住工作表默认网格线；无填充区域则保留 Sheet 网格线。
-      for (const [label, sample] of [["表头", headerMiddle], ["奇数行", firstBody], ["偶数行", secondBody]]) {
-        const gridlineProbe = document.createElement("div");
-        applyRawGridlineState(gridlineProbe, sample, { showGridLines: true });
-        assert(
-          gridlineProbe.classList.contains("has-sheet-gridline") === !Boolean(sample.fillColor),
-          styleName,
-          `${label}的填充与工作表网格线状态不一致`
-        );
-      }
-
-      // 关闭条纹后，所有数据行都必须回落到 wholeTable 的基础填充。
-      const plainTable = makeTable(styleName, { showRowStripes: false });
-      assert(
-        styleAt(plainTable, 1, 1).fillColor === palette.bodyFill
-          && styleAt(plainTable, 2, 1).fillColor === palette.bodyFill,
-        styleName,
-        "关闭行条纹后仍残留条纹填充"
-      );
-
-      // 首列、末列选项只强调对应列，不能把中间列一起加粗。
-      const emphasizedTable = makeTable(styleName, {
+      // 六种表选项同时启用，遍历全部单元格，保证区域组合不会产生非法样式。
+      const combined = makeTable(styleName, {
+        totalsRow: true,
         showFirstColumn: true,
-        showLastColumn: true
+        showLastColumn: true,
+        showRowStripes: true,
+        showColumnStripes: true
       });
-      assert(styleAt(emphasizedTable, 2, 0).bold, styleName, "首列强调未生效");
-      assert(styleAt(emphasizedTable, 2, 2).bold, styleName, "末列强调未生效");
-      assert(!styleAt(emphasizedTable, 2, 1).bold, styleName, "首末列强调错误扩散到中间列");
-
-      // 汇总行使用独立的填充、字体和粗体，但仍保留整个表格的底边界。
-      const totalsTable = makeTable(styleName, { totalsRow: true });
-      const totals = styleAt(totalsTable, 4, 1);
-      assert(totals.bold, styleName, "汇总行必须加粗");
-      assert(totals.fillColor === palette.totalFill, styleName, "汇总行填充错误");
-      assert(totals.fontColor === palette.totalFont, styleName, "汇总行字体颜色错误");
-
-      if (family === "Light" && number <= 7) {
-        assert(!headerMiddle.fillColor, styleName, "Light 1~7 表头不应填充");
-        assert(Boolean(firstBody.fillColor) && !secondBody.fillColor, styleName, "Light 1~7 条纹明暗顺序错误");
-        expectBorder(styleName, headerMiddle, "top", "缺少表格顶边界");
-        expectBorder(styleName, headerMiddle, "bottom", "缺少表头底边界");
-        expectBorder(styleName, lastBody, "bottom", "缺少表格底边界");
-        expectNoBorder(styleName, firstBody, "right", "Light 1~7 不应生成内部竖线");
-      } else if (family === "Light" && number <= 14) {
-        assert(Boolean(headerMiddle.fillColor), styleName, "Light 8~14 缺少实色表头");
-        assert(firstBody.fillColor === secondBody.fillColor, styleName, "Light 8~14 不应生成隔行底色");
-        expectBorder(styleName, firstBody, "bottom", "缺少横向行分隔线");
-        expectNoBorder(styleName, firstBody, "right", "Light 8~14 不应生成内部竖线");
-        expectBorder(styleName, headerLeft, "left", "缺少表格左外框");
-      } else if (family === "Light") {
-        assert(!headerMiddle.fillColor, styleName, "Light 15~21 表头不应填充");
-        assert(Boolean(firstBody.fillColor) && !secondBody.fillColor, styleName, "Light 15~21 条纹明暗顺序错误");
-        expectBorder(styleName, firstBody, "bottom", "缺少单元格横向边框");
-        expectBorder(styleName, firstBody, "right", "缺少单元格竖向边框");
-        expectBorder(styleName, headerLeft, "left", "缺少表格左外框");
-      } else if (family === "Medium" && number <= 7) {
-        assert(Boolean(headerMiddle.fillColor), styleName, "Medium 1~7 缺少实色表头");
-        assert(Boolean(firstBody.fillColor) && !secondBody.fillColor, styleName, "Medium 1~7 条纹明暗顺序错误");
-        expectBorder(styleName, firstBody, "bottom", "缺少横向行分隔线");
-        expectNoBorder(styleName, firstBody, "right", "Medium 1~7 不应生成内部竖线");
-        expectBorder(styleName, headerLeft, "left", "缺少表格左外框");
-      } else if (family === "Medium" && number <= 14) {
-        assert(Boolean(firstBody.fillColor) && Boolean(secondBody.fillColor), styleName, "Medium 8~14 两组条纹都应填充");
-        assert(firstBody.fillColor !== secondBody.fillColor, styleName, "Medium 8~14 两组条纹颜色不应相同");
-        expectBorder(styleName, headerMiddle, "bottom", "缺少白色粗表头分隔线", 3);
-        expectBorder(styleName, firstBody, "bottom", "缺少白色行分隔线");
-        expectBorder(styleName, firstBody, "right", "缺少白色列分隔线");
-      } else if (family === "Medium" && number <= 21) {
-        assert(Boolean(firstBody.fillColor) && !secondBody.fillColor, styleName, "Medium 15~21 中性条纹错误");
-        expectBorder(styleName, headerMiddle, "top", "缺少黑色粗顶边界", 2);
-        expectBorder(styleName, headerMiddle, "bottom", "缺少黑色粗表头边界", 2);
-        expectBorder(styleName, lastBody, "bottom", "缺少黑色粗底边界", 2);
-        if (number === 15) {
-          expectBorder(styleName, firstBody, "right", "Medium 15 缺少内部单元格边框");
-        } else {
-          expectNoBorder(styleName, firstBody, "right", "Medium 16~21 不应额外生成内部竖线");
+      for (let row = 0; row <= 4; row += 1) {
+        for (let column = 0; column <= 2; column += 1) {
+          const value = at(combined, row, column);
+          assert(Boolean(value), styleName, "区域组合未生成单元格样式");
+          assert(isCssColor(value.fillColor), styleName, "组合后的填充色无效");
+          assert(isCssColor(value.fontColor), styleName, "组合后的字体色无效");
         }
-      } else if (family === "Medium") {
-        assert(Boolean(firstBody.fillColor) && Boolean(secondBody.fillColor), styleName, "Medium 22~28 两组条纹都应填充");
-        assert(firstBody.fillColor !== secondBody.fillColor, styleName, "Medium 22~28 两组条纹颜色不应相同");
-        expectBorder(styleName, firstBody, "bottom", "缺少单元格横向边框");
-        expectBorder(styleName, firstBody, "right", "缺少单元格竖向边框");
-      } else {
-        assert(Boolean(headerMiddle.fillColor), styleName, "Dark 样式缺少深色表头");
-        assert(headerMiddle.fontColor === palette.headerFont, styleName, "Dark 表头字体颜色错误");
-        assert(Boolean(firstBody.fillColor) && Boolean(secondBody.fillColor), styleName, "Dark 两组条纹都应填充");
-        assert(firstBody.fillColor !== secondBody.fillColor, styleName, "Dark 两组条纹颜色不应相同");
-        expectBorder(styleName, headerMiddle, "bottom", "Dark 表头缺少白色横向分隔线");
-        expectNoBorder(styleName, firstBody, "bottom", "Dark 表体不应生成白色横向网格线");
-        expectNoBorder(styleName, headerMiddle, "right", "Dark 表头不应生成白色纵向网格线");
-        expectNoBorder(styleName, firstBody, "right", "Dark 表体不应生成白色纵向网格线");
-        expectNoBorder(styleName, lastBody, "bottom", "Dark 表体底部不应生成额外边界");
-        expectNoBorder(styleName, totals, "right", "Dark 汇总行不应生成白色纵向网格线");
       }
+
+      // 关闭全部可选强调后，表体必须只剩 wholeTable 的基础定义。
+      const plain = makeTable(styleName, {
+        showRowStripes: false,
+        showColumnStripes: false,
+        showFirstColumn: false,
+        showLastColumn: false
+      });
+      const wholeFill = palette.elements.wholeTable.fillColor || "";
+      expectColor(at(plain, 2, 1).fillColor, wholeFill, styleName, "基础表体填充");
       checkedStyles += 1;
     }
   }
-
-  /**
-   * 使用默认 Office 主题的实测颜色做哨兵校验，既能发现主题槽映射错位，也能
-   * 发现 tint 舍入、深浅条纹次序或复合色来源被改坏。这里只用于回归断言，
-   * 实际渲染仍从每个工作簿的 theme1.xml 动态取色。
-   */
-  const exactCases = [
-    ["TableStyleLight2", "headerFont", "#305496"],
-    ["TableStyleLight2", "firstRowStripeFill", "#D9E1F2"],
-    ["TableStyleLight9", "headerFill", "#4472C4"],
-    ["TableStyleLight16", "firstRowStripeFill", "#D9E1F2"],
-    ["TableStyleMedium9", "firstRowStripeFill", "#B4C6E7"],
-    ["TableStyleMedium9", "secondRowStripeFill", "#D9E1F2"],
-    ["TableStyleDark1", "firstRowStripeFill", "#404040"],
-    ["TableStyleDark1", "secondRowStripeFill", "#737373"],
-    ["TableStyleDark2", "headerFill", "#000000"],
-    ["TableStyleDark2", "firstRowStripeFill", "#305496"],
-    ["TableStyleDark2", "secondRowStripeFill", "#4472C4"],
-    ["TableStyleDark8", "firstRowStripeFill", "#A6A6A6"],
-    ["TableStyleDark8", "secondRowStripeFill", "#D9D9D9"],
-    ["TableStyleDark9", "headerFill", "#ED7D31"],
-    ["TableStyleDark9", "firstRowStripeFill", "#B4C6E7"],
-    ["TableStyleDark9", "secondRowStripeFill", "#D9E1F2"],
-    ["TableStyleDark10", "firstRowStripeFill", "#DBDBDB"],
-    ["TableStyleDark10", "secondRowStripeFill", "#EDEDED"],
-    ["TableStyleDark11", "headerFill", "#70AD47"],
-    ["TableStyleDark11", "firstRowStripeFill", "#BDD7EE"],
-    ["TableStyleDark11", "secondRowStripeFill", "#DDEBF7"]
-  ];
-  for (const [styleName, property, expected] of exactCases) {
-    const actual = createBuiltInTablePalette(styleName, DEFAULT_THEME_COLORS)[property];
-    assert(actual === expected, styleName, `${property} 应为 ${expected}，实际为 ${actual}`);
-  }
-
-  /**
-   * 再用一套刻意避开 Office 默认值的主题跑完 60 项。每个样式都必须随主题
-   * 改变；否则说明某处又把图库颜色写成了固定 RGB，换主题的工作簿就会偏色。
-   */
-  const customTheme = [
-    "FFFDF6", "18212B", "EEE8DD", "34495E",
-    "1F4E78", "A23E48", "5B7553", "B8860B",
-    "287D8E", "6E4B8B", "1261A0", "7C365A"
-  ];
-  for (const [family, lastNumber] of families) {
-    for (let number = 1; number <= lastNumber; number += 1) {
-      const styleName = `TableStyle${family}${number}`;
-      const officePalette = createBuiltInTablePalette(styleName, DEFAULT_THEME_COLORS);
-      const themedPalette = createBuiltInTablePalette(styleName, customTheme);
-      assert(
-        JSON.stringify(officePalette) !== JSON.stringify(themedPalette),
-        styleName,
-        "更换工作簿主题后样式没有变化，疑似使用了固定颜色"
-      );
-    }
-  }
-  assert(
-    createBuiltInTablePalette("TableStyleLight9", customTheme).headerFill === "#1F4E78",
-    "TableStyleLight9",
-    "自定义主题的 accent1 没有映射到表头"
-  );
-  assert(
-    createBuiltInTablePalette("TableStyleDark10", customTheme).headerFill === "#B8860B",
-    "TableStyleDark10",
-    "复合样式的 accent4 表头映射错误"
-  );
-
-  // 同时开启行、列条纹时，列条纹按 OOXML 顺序后应用，并覆盖交叉处的行条纹。
-  const crossingTable = makeTable("TableStyleMedium9", { showColumnStripes: true });
-  assert(
-    styleAt(crossingTable, 1, 1).fillColor === crossingTable.palette.secondColumnStripeFill,
-    "TableStyleMedium9",
-    "行列条纹交叉处没有按规范让列条纹优先"
-  );
   assert(checkedStyles === 60, "全部样式", `只完成了 ${checkedStyles} 项回归`);
+
+  // Light 8~14 的行线/列线由对应条纹开关控制，不能在关闭条纹时凭空出现。
+  const light9Plain = makeTable("TableStyleLight9", { showRowStripes: false });
+  expectColor(at(light9Plain, 0, 1).fillColor, "#4472C4", "TableStyleLight9", "表头填充");
+  expectColor(at(light9Plain, 2, 1).fillColor, "", "TableStyleLight9", "无条纹表体填充");
+  assert(!borderAt(at(light9Plain, 2, 1), "bottom"), "TableStyleLight9", "关闭行条纹后仍有内部横线");
+  const light9Striped = makeTable("TableStyleLight9", { showColumnStripes: true });
+  expectBorder(at(light9Striped, 2, 1), "top", { width: 1, color: "#4472C4" }, "TableStyleLight9", "行条纹顶边");
+  expectBorder(at(light9Striped, 2, 1), "left", { width: 1, color: "#4472C4" }, "TableStyleLight9", "列条纹左边");
+
+  const light16 = makeTable("TableStyleLight16", { totalsRow: true });
+  expectColor(at(light16, 0, 1).fillColor, "", "TableStyleLight16", "表头填充");
+  expectColor(at(light16, 1, 1).fillColor, "#D9E1F2", "TableStyleLight16", "第一行条纹");
+  expectBorder(at(light16, 0, 1), "bottom", { width: 2, color: "#4472C4" }, "TableStyleLight16", "表头中边框");
+  expectBorder(at(light16, 4, 1), "top", { width: 3, style: "double", color: "#4472C4" }, "TableStyleLight16", "汇总行双边框");
+
+  // Medium 8~14 在关闭条纹时必须显示浅 80% 基础色，而不是浅 60% 条纹色。
+  const medium9Plain = makeTable("TableStyleMedium9", { showRowStripes: false });
+  const medium9 = makeTable("TableStyleMedium9", { totalsRow: true, showFirstColumn: true });
+  expectColor(at(medium9Plain, 2, 1).fillColor, "#D9E1F2", "TableStyleMedium9", "基础表体填充");
+  expectColor(at(medium9, 1, 1).fillColor, "#B4C6E7", "TableStyleMedium9", "第一行条纹");
+  expectColor(at(medium9, 2, 1).fillColor, "#D9E1F2", "TableStyleMedium9", "第二行条纹");
+  expectBorder(at(medium9, 0, 1), "bottom", { width: 3, color: "#FFFFFF" }, "TableStyleMedium9", "表头白色粗线");
+  expectColor(at(medium9, 2, 0).fillColor, "#4472C4", "TableStyleMedium9", "首列强调填充");
+  expectColor(at(medium9, 2, 0).fontColor, "#FFFFFF", "TableStyleMedium9", "首列强调字体");
+
+  // Medium 15~21 的首末列是完整强调块；汇总行只声明双线，不应强制套表头颜色。
+  const medium16 = makeTable("TableStyleMedium16", { totalsRow: true, showFirstColumn: true, showLastColumn: true });
+  expectColor(at(medium16, 2, 0).fillColor, "#4472C4", "TableStyleMedium16", "首列强调填充");
+  expectColor(at(medium16, 2, 2).fillColor, "#4472C4", "TableStyleMedium16", "末列强调填充");
+  expectColor(at(medium16, 4, 1).fillColor, "", "TableStyleMedium16", "汇总行继承填充");
+  assert(!at(medium16, 4, 1).bold, "TableStyleMedium16", "汇总行被错误强制加粗");
+  expectBorder(at(medium16, 4, 1), "top", { width: 3, style: "double", color: "#000000" }, "TableStyleMedium16", "汇总行双边框");
+
+  // Medium 22~28 的表头继承 wholeTable 浅色填充，汇总行使用主题色中边框。
+  const medium23 = makeTable("TableStyleMedium23", { totalsRow: true });
+  expectColor(at(medium23, 0, 1).fillColor, "#D9E1F2", "TableStyleMedium23", "表头继承填充");
+  expectColor(at(medium23, 1, 1).fillColor, "#B4C6E7", "TableStyleMedium23", "第一行条纹");
+  expectBorder(at(medium23, 4, 1), "top", { width: 2, color: "#4472C4" }, "TableStyleMedium23", "汇总行中边框");
+
+  // Dark 1~7：汇总行与首末列都有独立填充和白色中边框，表体没有网格线。
+  const dark2 = makeTable("TableStyleDark2", { totalsRow: true, showFirstColumn: true });
+  expectColor(at(dark2, 0, 1).fillColor, "#000000", "TableStyleDark2", "表头填充");
+  expectColor(at(dark2, 1, 1).fillColor, "#305496", "TableStyleDark2", "第一行条纹");
+  expectColor(at(dark2, 2, 1).fillColor, "#4472C4", "TableStyleDark2", "第二行条纹");
+  expectColor(at(dark2, 4, 1).fillColor, "#203764", "TableStyleDark2", "汇总行填充");
+  expectColor(at(dark2, 2, 0).fillColor, "#305496", "TableStyleDark2", "首列强调填充");
+  expectBorder(at(dark2, 2, 0), "right", { width: 2, color: "#FFFFFF" }, "TableStyleDark2", "首列分隔线");
+  assert(!borderAt(at(dark2, 2, 1), "bottom"), "TableStyleDark2", "深色表体不应出现横向网格线");
+
+  // Dark 8~11 的汇总行继承表体，不可错误复用表头色；条纹是浅 60% 而非浅 80%。
+  const dark8 = makeTable("TableStyleDark8", { totalsRow: true });
+  expectColor(at(dark8, 1, 1).fillColor, "#A6A6A6", "TableStyleDark8", "第一行条纹");
+  expectColor(at(dark8, 2, 1).fillColor, "#D9D9D9", "TableStyleDark8", "第二行条纹");
+  expectColor(at(dark8, 4, 1).fillColor, "#D9D9D9", "TableStyleDark8", "汇总行继承填充");
+  const dark9 = makeTable("TableStyleDark9", { totalsRow: true });
+  expectColor(at(dark9, 0, 1).fillColor, "#ED7D31", "TableStyleDark9", "复合色表头");
+  expectColor(at(dark9, 1, 1).fillColor, "#B4C6E7", "TableStyleDark9", "第一行条纹");
+  expectColor(at(dark9, 2, 1).fillColor, "#D9E1F2", "TableStyleDark9", "第二行条纹");
+  expectColor(at(dark9, 4, 1).fillColor, "#D9E1F2", "TableStyleDark9", "汇总行继承填充");
+  expectBorder(at(dark9, 4, 1), "top", { width: 3, style: "double", color: "#000000" }, "TableStyleDark9", "汇总行黑色双线");
+
+  /*
+   * “超级表测试.xlsx”中汇总行前有 16 行数据。偶数个数据行会让紧随其后的
+   * 行号再次落到第一条纹周期；这里同时开启行列条纹，专门防止条纹背景越过
+   * DataBodyRange 污染汇总行。汇总行没有显式填充时只能继承 wholeTable。
+   */
+  for (const [styleName, expectedFill] of [
+    ["TableStyleLight16", ""],
+    ["TableStyleMedium23", "#D9E1F2"],
+    ["TableStyleDark8", "#D9D9D9"]
+  ]) {
+    const fixtureLikeTable = makeTable(styleName, {
+      range: { startRow: 0, endRow: 17, startCol: 0, endCol: 2 },
+      totalsRow: true,
+      showRowStripes: true,
+      showColumnStripes: true
+    });
+    expectColor(
+      at(fixtureLikeTable, 17, 0).fillColor,
+      expectedFill,
+      styleName,
+      "汇总行不得继承行列条纹背景"
+    );
+  }
+
+  // 使用非默认主题确认预设始终从工作簿 theme1.xml 取色。
+  const customTheme = [
+    "FFFDF6", "18212B", "EEE8DD", "34495E", "1F4E78", "A23E48",
+    "5B7553", "B8860B", "287D8E", "6E4B8B", "1261A0", "7C365A"
+  ];
+  expectColor(
+    createBuiltInTablePalette("TableStyleLight9", customTheme).elements.headerRow.fillColor,
+    "#1F4E78",
+    "TableStyleLight9",
+    "自定义主题 accent1"
+  );
+
+  // 人工构造不同的行列条纹颜色，验证规范要求的“列条纹先、行条纹后”。
+  const crossing = makeTable("TableStyleMedium9", { showColumnStripes: true });
+  crossing.palette = {
+    ...crossing.palette,
+    elements: {
+      wholeTable: { fillColor: "#FFFFFF" },
+      firstColumnStripe: { fillColor: "#4472C4" },
+      firstRowStripe: { fillColor: "#ED7D31" }
+    }
+  };
+  expectColor(at(crossing, 1, 0).fillColor, "#ED7D31", "条纹优先级", "行列交叉填充");
 }
 
 verifyBuiltInTableStyleRegression();

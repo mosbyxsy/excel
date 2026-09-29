@@ -1,5 +1,5 @@
 /* ========================================================================== */
-/* 7. 页脚与响应式适配                                                         */
+/* 页脚与响应式适配                                                            */
 /* ========================================================================== */
 
 footer {
@@ -94,7 +94,7 @@ footer {
 }
 
 /* ========================================================================== */
-/* 8. 居中文件空状态与单行查看器工具栏                                       */
+/* 居中文件空状态与单行查看器工具栏                                          */
 /* ========================================================================== */
 
 /*
@@ -114,8 +114,7 @@ footer {
 }
 
 .viewer-card.is-empty .viewer-toolbar,
-.viewer-card.is-empty .status-line,
-.viewer-card.is-empty .grid-empty {
+.viewer-card.is-empty .status-line {
   display: none;
 }
 
@@ -281,38 +280,6 @@ footer {
   max-width: min(48vw, 520px);
 }
 
-/* 状态栏左侧承载 Sheet，右侧显示当前渲染状态。 */
-.status-line .sheet-bar {
-  min-width: 0;
-  min-height: 0;
-  height: 35px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  overflow: hidden;
-  border: 0;
-  background: transparent;
-}
-
-.status-line .sheet-label {
-  padding: 0;
-  flex: 0 0 auto;
-}
-
-.status-line .sheet-tabs {
-  height: 100%;
-  align-items: stretch;
-}
-
-.status-line .sheet-tab {
-  height: 35px;
-}
-
-.status-line .status-feedback {
-  max-width: min(52vw, 680px);
-}
-
 .viewer-toolbar .toolbar-actions {
   min-width: 0;
   gap: 8px;
@@ -436,9 +403,9 @@ footer {
 
   /* Sheet 保持在左侧，右侧状态信息单行省略，二者都不会撑宽页面。 */
   .status-line {
-    min-height: 36px;
+    min-height: 40px;
     padding: 0 8px;
-    flex-basis: 36px;
+    flex-basis: 40px;
     grid-template-columns: minmax(0, 1fr) minmax(0, 52%);
     gap: 8px;
   }
@@ -450,6 +417,7 @@ footer {
   .status-line .sheet-tabs {
     width: 100%;
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: none;
   }
 
@@ -464,6 +432,7 @@ footer {
   .status-line .status-feedback {
     width: 100%;
     max-width: none;
+    padding-left: 8px;
   }
 
 }

@@ -14,8 +14,6 @@ import {
   finishStartupLoading,
   formatBytes,
   setStatus,
-  showLoading,
-  hideLoading,
   setCopyEnabled,
   copyRenderedCell,
   nextPaint
@@ -32,6 +30,7 @@ import {
   renderCurrentSheet,
   renderVirtualWindow,
   syncRawAxesScroll,
+  updateSheetTabsScrollState,
   revealRawMatch,
   stepRawMatch,
   // 行号、列号的点击事件由入口模块统一代理，因此需要显式导入固定切换函数。
@@ -39,18 +38,18 @@ import {
 } from "./viewer/viewer.js";
 
 /* ======================================================================== */
-/* 6. 本地文件、远程 URL 和页面事件                                         */
+/* 文件加载、远程配置与页面事件                                             */
 /* ======================================================================== */
 
 async function loadArrayBuffer(buffer, fileName, typeHint, byteLength, sequence, sourcePath, autoFit) {
-  showLoading("正在解析工作表", `${fileName} · ${formatBytes(byteLength)}`);
+  setStartupLoading("正在解析工作表", `${fileName} · ${formatBytes(byteLength)}`);
   setStatus("正在读取文件内容…");
   await nextPaint();
   try {
     const workbook = await parseWorkbook(buffer, fileName, typeHint);
     if (sequence !== state.loadSequence) return;
     // 解析完成后先让浏览器绘制“正在打开”阶段，再执行工作表标签和表格 DOM 渲染。
-    showLoading("正在打开工作表", fileName);
+    setStartupLoading("正在打开工作表", fileName);
     await nextPaint();
     if (sequence !== state.loadSequence) return;
     setWorkbook(workbook, byteLength, sourcePath, autoFit);
@@ -58,7 +57,7 @@ async function loadArrayBuffer(buffer, fileName, typeHint, byteLength, sequence,
     if (sequence !== state.loadSequence) return;
     showLoadError(error, fileName);
   } finally {
-    if (sequence === state.loadSequence) hideLoading();
+    if (sequence === state.loadSequence) finishStartupLoading();
   }
 }
 
@@ -70,7 +69,7 @@ async function loadLocalFile(file) {
   }
   if (state.fetchController) state.fetchController.abort();
   const sequence = beginFileLoad(file.name);
-  showLoading("正在读取本地文件", `${file.name} · ${formatBytes(file.size)}`);
+  setStartupLoading("正在读取本地文件", `${file.name} · ${formatBytes(file.size)}`);
   try {
     const buffer = await file.arrayBuffer();
     if (sequence !== state.loadSequence) return;
@@ -78,7 +77,6 @@ async function loadLocalFile(file) {
     await loadArrayBuffer(buffer, file.name, "", file.size, sequence, "", false);
   } catch (error) {
     if (sequence !== state.loadSequence) return;
-    hideLoading();
     showLoadError(error, file.name);
   } finally {
     // 允许用户连续选择同一个文件时仍触发 change 事件。
@@ -97,7 +95,7 @@ async function loadRemoteFile(url, item) {
   state.fetchController = controller;
   const fileName = item && item.name ? item.name : nameFromUrl(trimmedUrl);
   const sequence = beginFileLoad(fileName);
-  showLoading("正在下载在线文件", fileName);
+  setStartupLoading("正在下载在线文件", fileName);
   setStatus("正在请求远程文件…");
   try {
     const response = await fetch(trimmedUrl, {
@@ -123,7 +121,6 @@ async function loadRemoteFile(url, item) {
   } catch (error) {
     if (error.name === "AbortError") return;
     if (sequence !== state.loadSequence) return;
-    hideLoading();
     if (error instanceof TypeError) {
       showLoadError(
         new Error("无法读取远程文件。请确认 URL 正确，并且文件服务器已允许 CORS 跨域访问。"),
@@ -168,16 +165,18 @@ function normalizePresetFiles(files) {
   if (!Array.isArray(files)) return [];
   const supportedTypes = new Set(["xlsx", "xlsm", "xls", "csv"]);
   return files.reduce((result, item) => {
-    if (!item || item.id == null || !String(item.name || "").trim() || !String(item.url || "").trim()) {
-      return result;
-    }
+    const id = item && item.id != null ? String(item.id).trim() : "";
+    const name = item ? String(item.name || "").trim() : "";
+    const url = item ? String(item.url || "").trim() : "";
+    if (!id || !name || !url) return result;
     const type = String(item.type || "").trim().toLowerCase();
+    const action = String(item.action || "").trim().toLowerCase();
     result.push({
-      id: String(item.id),
-      name: String(item.name).trim(),
-      url: String(item.url).trim(),
+      id,
+      name,
+      url,
       type: supportedTypes.has(type) ? type : "",
-      action: String(item.action || "").trim().toLowerCase(),
+      action: action === "open" ? "open" : "",
       autoFit: item.autoFit === true
     });
     return result;
@@ -387,10 +386,7 @@ document.addEventListener("click", (event) => {
   }
 });
 
-// 菜单使用视口坐标；窗口缩放或任意滚动容器移动时同步其锚点位置。
-window.addEventListener("resize", () => {
-  if (!dom.presetOptions.hidden) positionPresetMenu();
-});
+// 菜单使用视口坐标；任意滚动容器移动时同步其锚点位置。
 document.addEventListener("scroll", () => {
   if (!dom.presetOptions.hidden) positionPresetMenu();
 }, true);
@@ -445,6 +441,89 @@ dom.search.addEventListener("keydown", (event) => {
 dom.searchPrev.addEventListener("click", () => stepRawMatch(-1));
 dom.searchNext.addEventListener("click", () => stepRawMatch(1));
 
+// 隐藏原生滚动条后，触摸板横向手势仍由浏览器处理；普通滚轮则转换为横向移动。
+dom.sheetTabs.addEventListener("wheel", (event) => {
+  if (!dom.statusLine.classList.contains("has-sheet-overflow")) return;
+  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+  if (!delta) return;
+  const previous = dom.sheetTabs.scrollLeft;
+  dom.sheetTabs.scrollLeft += delta;
+  if (dom.sheetTabs.scrollLeft !== previous) event.preventDefault();
+}, { passive: false });
+
+dom.sheetTabs.addEventListener("scroll", updateSheetTabsScrollState, { passive: true });
+
+let sheetScrollDrag = null;
+
+/** 将覆盖式滚动条上的相对位置转换为标签容器的 scrollLeft。 */
+function scrollSheetTabsToTrackPosition(clientX) {
+  const trackRect = dom.sheetScrollTrack.getBoundingClientRect();
+  const thumbWidth = dom.sheetScrollThumb.offsetWidth;
+  const travel = Math.max(0, trackRect.width - thumbWidth);
+  const maxScrollLeft = Math.max(0, dom.sheetTabs.scrollWidth - dom.sheetTabs.clientWidth);
+  if (!travel || !maxScrollLeft) return;
+  const thumbLeft = Math.min(travel, Math.max(0, clientX - trackRect.left - thumbWidth / 2));
+  dom.sheetTabs.scrollLeft = thumbLeft / travel * maxScrollLeft;
+}
+
+dom.sheetScrollTrack.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || event.target === dom.sheetScrollThumb) return;
+  scrollSheetTabsToTrackPosition(event.clientX);
+  event.preventDefault();
+});
+
+dom.sheetScrollThumb.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  const maxScrollLeft = Math.max(0, dom.sheetTabs.scrollWidth - dom.sheetTabs.clientWidth);
+  const travel = Math.max(0, dom.sheetScrollTrack.clientWidth - dom.sheetScrollThumb.offsetWidth);
+  if (!maxScrollLeft || !travel) return;
+  sheetScrollDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startScrollLeft: dom.sheetTabs.scrollLeft,
+    maxScrollLeft,
+    travel
+  };
+  dom.sheetScrollThumb.setPointerCapture(event.pointerId);
+  dom.sheetScrollThumb.classList.add("is-dragging");
+  event.stopPropagation();
+  event.preventDefault();
+});
+
+dom.sheetScrollThumb.addEventListener("pointermove", (event) => {
+  if (!sheetScrollDrag || sheetScrollDrag.pointerId !== event.pointerId) return;
+  const delta = event.clientX - sheetScrollDrag.startX;
+  dom.sheetTabs.scrollLeft = sheetScrollDrag.startScrollLeft
+    + delta / sheetScrollDrag.travel * sheetScrollDrag.maxScrollLeft;
+  event.preventDefault();
+});
+
+function finishSheetScrollDrag(event) {
+  if (!sheetScrollDrag || sheetScrollDrag.pointerId !== event.pointerId) return;
+  sheetScrollDrag = null;
+  dom.sheetScrollThumb.classList.remove("is-dragging");
+}
+
+for (const eventName of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  dom.sheetScrollThumb.addEventListener(eventName, finishSheetScrollDrag);
+}
+
+// 自定义滚动条保持键盘可用，方向键微调，Page 键翻动一屏，Home/End 到达两端。
+dom.sheetScrollTrack.addEventListener("keydown", (event) => {
+  const pageDistance = Math.max(80, dom.sheetTabs.clientWidth * 0.8);
+  const targets = {
+    ArrowLeft: dom.sheetTabs.scrollLeft - 80,
+    ArrowRight: dom.sheetTabs.scrollLeft + 80,
+    PageUp: dom.sheetTabs.scrollLeft - pageDistance,
+    PageDown: dom.sheetTabs.scrollLeft + pageDistance,
+    Home: 0,
+    End: dom.sheetTabs.scrollWidth
+  };
+  if (!(event.key in targets)) return;
+  dom.sheetTabs.scrollLeft = targets[event.key];
+  event.preventDefault();
+});
+
 // 使用事件委托，虚拟滚动中新创建的行列标记和数据单元格无需逐个绑定事件。
 dom.gridFrame.addEventListener("click", (event) => {
   const pinTarget = event.target.closest("[data-pin-axis][data-pin-index]");
@@ -478,7 +557,9 @@ dom.viewport.addEventListener("scroll", () => {
   });
 }, { passive: true });
 
-window.addEventListener("resize", () => {
+/** 同时处理顶层下拉菜单定位和表格尺寸变化，避免注册两套全局 resize 监听。 */
+function handleViewportResize() {
+  if (!dom.presetOptions.hidden) positionPresetMenu();
   if (!state.workbook || state.renderFrame) return;
   state.renderFrame = requestAnimationFrame(() => {
     state.renderFrame = 0;
@@ -491,7 +572,9 @@ window.addEventListener("resize", () => {
       renderVirtualWindow(true);
     }
   });
-});
+}
+
+window.addEventListener("resize", handleViewportResize);
 
 /**
  * 页面启动顺序：建立空状态 -> 读取 config JSON -> 合并预置文件 -> 选择自动打开项。
@@ -499,50 +582,55 @@ window.addEventListener("resize", () => {
  */
 async function initializePage() {
   const startup = startupRequest();
-  state.configPath = startup.configPath;
-  state.presetFiles = normalizePresetFiles(config.files);
-  populatePresetFiles();
-  // 首次建立空状态时保留查询参数，启动遮罩会阻止选择界面提前闪现。
-  enterFileSelection("", true);
+  setStartupLoading(
+    "正在初始化查看器",
+    startup.hasQuery ? "正在解析地址栏参数…" : "正在读取页面配置…"
+  );
+  try {
+    state.configPath = startup.configPath;
+    state.presetFiles = normalizePresetFiles(config.files);
+    populatePresetFiles();
+    // 首次建立空状态时保留查询参数，启动遮罩会阻止选择界面提前闪现。
+    enterFileSelection("", true);
 
-  if (startup.hasQuery) setStartupLoading("正在初始化查看器", "正在解析地址栏参数…");
-
-  if (startup.hasConfig) {
-    if (!startup.configPath) {
-      enterFileSelection("config 参数不能为空。", true);
-      finishStartupLoading();
-      return;
+    if (startup.hasConfig) {
+      if (!startup.configPath) {
+        enterFileSelection("config 参数不能为空。", true);
+        return;
+      }
+      try {
+        await loadRemoteConfig(startup.configPath);
+      } catch (error) {
+        enterFileSelection(error.message || "无法读取 config JSON。", true);
+        return;
+      }
     }
-    try {
-      await loadRemoteConfig(startup.configPath);
-    } catch (error) {
-      enterFileSelection(error.message || "无法读取 config JSON。", true);
-      finishStartupLoading();
-      return;
+
+    const actionFile = state.presetFiles.find((file) => file.action === "open") || null;
+    const defaultFile = config.defaultFileId == null
+      ? null
+      : state.presetFiles.find((file) => file.id === String(config.defaultFileId)) || null;
+    const selectedFile = actionFile || defaultFile;
+
+    if (startup.filePath) {
+      dom.remoteUrl.value = startup.filePath;
+      setStartupLoading("正在打开工作表", startup.filePath);
+      await loadRemoteFile(startup.filePath, null);
+    } else if (selectedFile) {
+      choosePreset(selectedFile.id, false);
+      dom.remoteUrl.value = selectedFile.url;
+      setStartupLoading("正在打开预置文件", selectedFile.name);
+      await loadRemoteFile(selectedFile.url, selectedFile);
     }
+  } finally {
+    // 无论最终显示表格、文件选择界面还是错误提示，启动遮罩都只在这里统一结束。
+    finishStartupLoading();
   }
-
-  const actionFile = state.presetFiles.find((file) => file.action === "open") || null;
-  const defaultFile = config.defaultFileId == null
-    ? null
-    : state.presetFiles.find((file) => file.id === String(config.defaultFileId)) || null;
-  const selectedFile = actionFile || defaultFile;
-
-  if (startup.filePath) {
-    dom.remoteUrl.value = startup.filePath;
-    setStartupLoading("正在打开工作表", startup.filePath);
-    await loadRemoteFile(startup.filePath, null);
-  } else if (selectedFile) {
-    choosePreset(selectedFile.id, false);
-    dom.remoteUrl.value = selectedFile.url;
-    setStartupLoading("正在打开预置文件", selectedFile.name);
-    await loadRemoteFile(selectedFile.url, selectedFile);
-  }
-
-  // 清单和可选工作簿均已处理完成，此时才允许用户看到最终界面。
-  finishStartupLoading();
 }
 
 // 将列表框提升到 body，脱离 source-panel 的 overflow 裁切和滚动范围。
 document.body.appendChild(dom.presetOptions);
-initializePage();
+initializePage().catch((error) => {
+  const message = error && error.message ? error.message : "未知错误";
+  enterFileSelection(`页面初始化失败：${message}`, true);
+});

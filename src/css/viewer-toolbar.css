@@ -1,5 +1,5 @@
 /* ========================================================================== */
-/* 4. 查看器工具栏与工作表标签                                                 */
+/* 查看器工具栏与工作表标签                                                    */
 /* ========================================================================== */
 
 .viewer-card {
@@ -210,18 +210,21 @@
 }
 
 .sheet-bar {
-  min-height: 36px;
-  padding: 3px 12px 0;
-  flex: 0 0 36px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  border-bottom: 1px solid var(--line);
-  background: #fbfcfc;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
 }
 
 .sheet-label {
-  padding-bottom: 8px;
+  padding: 0 2px;
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
@@ -229,57 +232,173 @@
   text-transform: uppercase;
 }
 
-.sheet-tabs {
+.sheet-tabs-shell {
   min-width: 0;
+  height: 100%;
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.sheet-tabs {
+  width: 100%;
+  height: 100%;
+  padding: 0 1px;
   display: flex;
-  gap: 3px;
+  align-items: stretch;
+  gap: 2px;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.sheet-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.sheet-tabs-shell::before,
+.sheet-tabs-shell::after {
+  width: 22px;
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 5px;
+  opacity: 0;
+  pointer-events: none;
+  content: "";
+  transition: opacity 140ms ease;
+}
+
+.sheet-tabs-shell::before {
+  left: 0;
+  background: linear-gradient(90deg, #f6f9f7 8%, rgba(246, 249, 247, 0));
+}
+
+.sheet-tabs-shell::after {
+  right: 0;
+  background: linear-gradient(270deg, #f6f9f7 8%, rgba(246, 249, 247, 0));
+}
+
+.sheet-tabs-shell.can-scroll-left::before,
+.sheet-tabs-shell.can-scroll-right::after {
+  opacity: 1;
+}
+
+.sheet-scroll-track {
+  height: 5px;
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  outline: 0;
+  background: var(--line);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.sheet-scroll-track:focus-visible {
+  box-shadow: 0 0 0 2px rgba(21, 122, 98, 0.25);
+}
+
+.sheet-scroll-thumb {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #829e95;
+  box-shadow: 0 0 0 1px rgba(14, 94, 75, 0.08);
+  cursor: grab;
+  transform: translate3d(0, 0, 0);
+  transform-origin: left center;
+  will-change: transform;
+}
+
+.sheet-scroll-thumb:hover {
+  background: #678a7e;
+}
+
+.sheet-scroll-thumb.is-dragging {
+  background: var(--brand);
+  cursor: grabbing;
 }
 
 .sheet-tab {
-  height: 33px;
-  padding: 0 12px;
+  height: 39px;
+  padding: 0 11px;
   flex: 0 0 auto;
+  position: relative;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: 7px 7px 0 0;
   color: var(--muted);
   background: transparent;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.sheet-tab::after {
+  height: 2px;
+  position: absolute;
+  right: 8px;
+  bottom: 1px;
+  left: 8px;
+  border-radius: 999px;
+  background: var(--brand);
+  opacity: 0;
+  content: "";
+  transition: bottom 120ms ease, opacity 120ms ease;
+}
+
+.status-line.has-sheet-overflow .sheet-tab::after {
+  bottom: 6px;
 }
 
 .sheet-tab:hover {
   color: var(--brand-dark);
+  background: rgba(21, 122, 98, 0.06);
 }
 
 .sheet-tab.is-active {
-  border-bottom-color: var(--brand);
   color: var(--brand-dark);
-  font-weight: 750;
+  background: rgba(21, 122, 98, 0.08);
+  font-weight: 800;
+}
+
+.sheet-tab.is-active::after {
+  opacity: 1;
 }
 
 .status-line {
-  min-height: 36px;
+  min-height: 40px;
   padding: 0 12px;
-  flex: 0 0 36px;
+  flex: 0 0 40px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  gap: 16px;
-  border-bottom: 1px solid var(--line);
+  gap: 14px;
+  overflow: hidden;
+  border-bottom: 0;
   color: #567068;
-  background: #f6faf8;
+  background: linear-gradient(180deg, #f9fbfa 0%, #f3f8f6 100%);
+  box-shadow: inset 0 -1px var(--line);
   font-size: 10px;
 }
 
 /* 状态文字单独靠右显示，过长内容使用省略号，避免挤压工作表标签。 */
 .status-feedback {
   min-width: 0;
+  max-width: min(46vw, 620px);
+  padding-left: 12px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  border-left: 1px solid var(--line);
   white-space: nowrap;
 }
 
@@ -313,50 +432,8 @@
 }
 
 /* ========================================================================== */
-/* 5. 空状态、加载状态与表格容器                                               */
+/* 状态提示与表格容器                                                          */
 /* ========================================================================== */
-
-.grid-empty {
-  min-height: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  text-align: center;
-}
-
-.grid-empty strong {
-  margin-top: 17px;
-  color: #405851;
-  font-size: 14px;
-}
-
-.grid-empty p {
-  margin: 6px 0 0;
-  font-size: 12px;
-}
-
-.empty-illustration {
-  width: 78px;
-  height: 58px;
-  padding: 7px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  grid-template-rows: repeat(2, 1fr);
-  gap: 4px;
-  transform: rotate(-3deg);
-  border: 1px solid #bfd5cd;
-  border-radius: 8px;
-  background: #eff8f4;
-  box-shadow: 9px 8px 0 #f7faf9, 9px 8px 0 1px #d6e3df;
-}
-
-.empty-illustration span {
-  border-radius: 2px;
-  background: #c4dfd5;
-}
 
 .grid-frame {
   min-height: 0;
