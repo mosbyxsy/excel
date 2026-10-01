@@ -14,11 +14,12 @@ window.EXCEL_VIEWER_CONFIG = {
    * - name：显示在下拉列表中的名称；
    * - url：文件地址，可以是同源相对地址或允许 CORS 的完整 URL；
    * - type：可选，支持 xlsx、xlsm、xls、csv。省略时根据地址和文件签名判断。
-   * - action：可选；设置为 "open" 时页面启动后默认打开该文件。
+   * - action：可选；设置为 "open" 时作为后备默认文件，仅在 defaultFileId 未匹配时使用。
    * - autoFit：可选；true 表示打开后默认按原列宽比例适应可视区域，默认 false。
    *
    * 通过 ?config= 加载的远程 JSON 也使用 { files: [] } 结构和相同字段。
-   * 若合并后的列表中有多个 action: "open"，页面只打开排列在最前面的一个。
+   * 启动优先级：URL 指定文件 > defaultFileId > 第一个 action: "open" 文件。
+   * 若合并后的列表中有多个 action: "open"，页面只使用排列在最前面的一个。
    *
    * 示例：
    * { id: "report", name: "月度报表", url: "/files/report.xlsx", type: "xlsx", autoFit: false }
@@ -76,7 +77,7 @@ window.EXCEL_VIEWER_CONFIG = {
   }],
 
   /** 页面打开后自动加载的预置文件 id；null 表示不自动加载。 */
-  defaultFileId: null,
+  defaultFileId: "local_id_7",
 
   /** 有效行数超过该值后启用行虚拟化，避免一次创建过多 DOM 节点。 */
   virtualizationThreshold: 500,

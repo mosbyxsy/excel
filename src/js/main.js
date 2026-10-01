@@ -298,8 +298,9 @@ function selectedPreset() {
 }
 
 /**
- * 读取 ?config= 指定的 JSON。格式必须是 { files: [] }；文件内容仅作为数据解析，
- * 所有名称仍通过 textContent 写入页面，不会执行清单中的 HTML 或脚本。
+ * 读取 ?config= 指定的 JSON。格式为 { files: [], defaultFileId?: string | null }；
+ * 文件内容仅作为数据解析，所有名称仍通过 textContent 写入页面，不会执行清单中的
+ * HTML 或脚本。返回值单独标记 defaultFileId 是否存在，以区分“未配置”和显式 null。
  */
 async function loadRemoteConfig(configPath) {
   setStartupLoading("正在读取文件清单", configPath);
@@ -323,9 +324,23 @@ async function loadRemoteConfig(configPath) {
     throw new Error('config JSON 格式错误，应为 { "files": [] }。');
   }
 
+  const hasDefaultFileId = Object.prototype.hasOwnProperty.call(payload, "defaultFileId");
+  if (
+    hasDefaultFileId
+    && payload.defaultFileId !== null
+    && typeof payload.defaultFileId !== "string"
+    && typeof payload.defaultFileId !== "number"
+  ) {
+    throw new Error("config JSON 的 defaultFileId 必须是字符串、数字或 null。");
+  }
+  const remoteDefaultFileId = hasDefaultFileId && payload.defaultFileId !== null
+    ? String(payload.defaultFileId).trim() || null
+    : null;
+
   const remoteFiles = normalizePresetFiles(payload.files);
   state.presetFiles = mergePresetFiles(remoteFiles, normalizePresetFiles(config.files));
   populatePresetFiles();
+  return { hasDefaultFileId, defaultFileId: remoteDefaultFileId };
 }
 
 dom.localFile.addEventListener("change", () => loadLocalFile(dom.localFile.files[0]));
@@ -578,10 +593,12 @@ window.addEventListener("resize", handleViewportResize);
 
 /**
  * 页面启动顺序：建立空状态 -> 读取 config JSON -> 合并预置文件 -> 选择自动打开项。
- * 显式 file/path/url 始终优先，其次是第一个 action: "open"，最后才是 defaultFileId。
+ * 显式 file/path/url 始终优先，其次是 defaultFileId，最后才回退到第一个 action: "open"。
  */
 async function initializePage() {
   const startup = startupRequest();
+  // 远端 JSON 未声明 defaultFileId 时沿用 config.js；显式声明（包括 null）则覆盖本地值。
+  let effectiveDefaultFileId = config.defaultFileId;
   setStartupLoading(
     "正在初始化查看器",
     startup.hasQuery ? "正在解析地址栏参数…" : "正在读取页面配置…"
@@ -599,7 +616,10 @@ async function initializePage() {
         return;
       }
       try {
-        await loadRemoteConfig(startup.configPath);
+        const remoteConfig = await loadRemoteConfig(startup.configPath);
+        if (remoteConfig.hasDefaultFileId) {
+          effectiveDefaultFileId = remoteConfig.defaultFileId;
+        }
       } catch (error) {
         enterFileSelection(error.message || "无法读取 config JSON。", true);
         return;
@@ -607,10 +627,10 @@ async function initializePage() {
     }
 
     const actionFile = state.presetFiles.find((file) => file.action === "open") || null;
-    const defaultFile = config.defaultFileId == null
+    const defaultFile = effectiveDefaultFileId == null
       ? null
-      : state.presetFiles.find((file) => file.id === String(config.defaultFileId)) || null;
-    const selectedFile = actionFile || defaultFile;
+      : state.presetFiles.find((file) => file.id === String(effectiveDefaultFileId)) || null;
+    const selectedFile = defaultFile || actionFile;
 
     if (startup.filePath) {
       dom.remoteUrl.value = startup.filePath;

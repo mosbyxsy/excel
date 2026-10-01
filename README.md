@@ -66,10 +66,11 @@ http://localhost:63341/Excel%E6%98%BE%E7%A4%BA/index.html?https%3A%2F%2Fexample.
 http://localhost:63341/Excel%E6%98%BE%E7%A4%BA/index.html?config=files%2Fviewer-config.json
 ```
 
-JSON 必须使用 `{ "files": [] }` 结构，文件字段与 `config.js` 相同：
+JSON 必须使用 `{ "files": [] }` 结构，并可通过 `defaultFileId` 指定默认文件；文件字段与 `config.js` 相同：
 
 ```json
 {
+  "defaultFileId": "monthly-report",
   "files": [
     {
       "id": "monthly-report",
@@ -83,7 +84,7 @@ JSON 必须使用 `{ "files": [] }` 结构，文件字段与 `config.js` 相同�
 }
 ```
 
-远程清单会与 `config.js` 中的 `files` 合并；远程清单排列在前，重复 `id` 也以远程清单为准。合并后的列表中包含 `action: "open"` 时自动打开第一项。显式 `file`、`path` 或 `url` 参数优先级更高，例如：
+远程清单会与 `config.js` 中的 `files` 合并；远程清单排列在前，重复 `id` 也以远程清单为准。远端 JSON 明确提供 `defaultFileId`（包括 `null`）时覆盖 `config.js` 中的同名配置；省略该字段时沿用本地配置。启动文件的选择优先级依次为：显式 `file`、`path` 或 `url` 参数，生效的 `defaultFileId` 指定文件，合并列表中第一个包含 `action: "open"` 的文件。例如：
 
 ```text
 index.html?config=files%2Fviewer-config.json&file=files%2Fother.xlsx
@@ -131,9 +132,9 @@ window.EXCEL_VIEWER_CONFIG = {
 - `name`：下拉列表和文件信息栏中显示的名称。
 - `url`：同源相对路径，或允许 CORS 的完整 URL。
 - `type`：可省略；支持 `xlsx`、`xlsm`、`xls`、`csv`。
-- `action`：可省略；值为 `open` 时作为默认打开文件，多个匹配项只使用第一个。
+- `action`：可省略；值为 `open` 时作为后备默认打开文件，多个匹配项只使用第一个；仅在没有 URL 指定文件且 `defaultFileId` 未匹配时生效。
 - `autoFit`：可省略，默认 `false`；设为 `true` 时该文件打开后自动开启原始视图宽度自适应。
-- `defaultFileId`：页面打开后自动加载的文件 id；`null` 表示不自动加载。
+- `defaultFileId`：页面打开后优先自动加载的文件 id；远端 JSON 中的配置高于 `config.js`，整体优先级低于 URL 指定文件、高于 `action: "open"`；`null` 表示不指定。
 - `virtualizationThreshold`：超过多少个有效行后启用虚拟滚动。
 - `overscanRows`：可视区域上下额外渲染的行数。
 
